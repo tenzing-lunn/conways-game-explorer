@@ -42,6 +42,7 @@ import {
   serializeDesignSettings,
 } from './design-settings.js';
 import {
+  formatCellCount,
   formatStatus,
   getCircuitMarkers,
   getFitZoom,
@@ -62,7 +63,7 @@ const WORLD_HEIGHT = 200;
 const LOCAL_RECOVERY_KEY = 'life-logic-dev-recovery-v1';
 const THEME_KEY = 'life-theme';
 const BASE_CELL_SIZE = 10;
-const MIN_ZOOM = 0.12;
+const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 3.6;
 const MAX_MAIN_THREAD_CATCH_UP_STEPS = 4;
 const SPEED_STEPS = [1, 2, 5, 10, 20, 40];
@@ -108,6 +109,20 @@ const GATE_CARDS = {
   or: { name: 'OR', note: 'Outputs a signal if either input is present' },
   not: { name: 'NOT', note: 'Outputs a signal only when input A is absent' },
   'half-adder': { name: 'Half-adder', note: 'Adds two bits. Outputs Sum and Carry.' },
+};
+
+// Publish readiness in plain words, keyed by the shared validator's field:code.
+const PUBLISH_ISSUE_COPY = {
+  'title:required': 'Give the project a title.',
+  'title:too_long': 'Keep the title under 120 characters.',
+  'description:too_short': 'Add a description of at least 20 characters.',
+  'description:too_long': 'Keep the description under 2,000 characters.',
+  'tags:required': 'Add at least one tag.',
+  'tags:too_many': 'Use no more than 8 tags.',
+  'tags:invalid': 'Tags can use lowercase letters, numbers and single hyphens.',
+  'board:invalid_size': 'The board is empty or too large to publish.',
+  'board:empty': 'Add at least one live cell before publishing.',
+  'board:invalid_rle': 'The board snapshot is not valid RLE.',
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -165,6 +180,7 @@ const elements = {
   moreMenuToggle: $('#more-menu-toggle'),
   moreMenu: $('#more-menu'),
   clearBoard: $('#clear-board'),
+  openInStudio: $('#open-in-studio'),
   importRle: $('#import-rle'),
   exportRle: $('#export-rle'),
   fitMobile: $('#fit-mobile'),
@@ -290,6 +306,9 @@ const state = {
   speed: 10,
   zoom: 1,
   mode: 'playground',
+  // Playground and Studio keep separate boards; the inactive one is stashed here.
+  boardOwner: 'playground',
+  workspaces: {},
   studioView: 'project',
   railTab: 'patterns',
   session: null,
@@ -300,6 +319,7 @@ const state = {
   previewConfig: {},
   recoveryFailed: false,
   simulationStepPending: false,
+  stepQueued: false,
   panX: 0,
   panY: 0,
   viewInitialized: false,
@@ -642,10 +662,11 @@ function remapActiveSession(creationMap, versionMaps = {}) {
 async function saveCloudProfileFromLocal(repo, user) {
   const localProfile = localCommunity.getState().profile;
   const email = localProfile?.email || user?.email || '';
-  const displayName = localProfile?.displayName
-    || user?.name
+  // The local profile's default name is a placeholder; prefer the account's.
+  const displayName = user?.name
     || getDisplayNameFromEmail(email)
-    || 'Life Builder';
+    || localProfile?.displayName
+    || 'Member';
 
   await repo.saveProfile({ email, displayName });
 }
@@ -740,7 +761,7 @@ function renderAccountDialog() {
   elements.accountSubmit.hidden = signedIn;
   elements.accountSubmit.disabled = !communityAuth.cloudConfigured || communityAuth.submitting;
   elements.accountSecurity.hidden = !signedIn;
-  if (signedIn) elements.accountContext.textContent = `Signed in as ${communityAuth.user?.email || communityAuth.session?.user?.email || 'Life Builder'}.`;
+  if (signedIn) elements.accountContext.textContent = `Signed in as ${communityAuth.user?.email || communityAuth.session?.user?.email || communityAuth.user?.name || 'your account'}.`;
 }
 
 async function submitAccountDialog() {
@@ -869,7 +890,16 @@ function renderCommunityAuth() {
   elements.accountEntryLabel.textContent = signedIn
     ? (user?.name || getDisplayNameFromEmail(user?.email) || 'Account')
     : 'Sign in';
+  // A local-only build has no accounts, so there is nothing to sign in to.
+  elements.accountEntry.hidden = !signedIn && !communityAuth.cloudConfigured;
   renderAccountDialog();
+}
+
+// The local owner reads as "You"; a signed-in account shows its name.
+function ownerLabel(ownerId, ownerName) {
+  if (ownerId !== (communityState.profile?.id || 'profile-local')) return ownerName;
+  const user = communityAuth.user || communityAuth.session?.user;
+  return isCloudSignedIn() ? (user?.name || getDisplayNameFromEmail(user?.email) || ownerName) : 'You';
 }
 
 /* ---------------------------------------------------------------------------
@@ -944,10 +974,15 @@ function selectionCommand(command) {
   let result;
   const rect = state.selection;
   if (command === 'paste') {
-    const origin = rect || screenToCell(canvas.clientWidth / 2, canvas.clientHeight / 2);
-    const x = Math.max(0, Math.min(state.board.width - state.clipboard.width, origin.x));
-    const y = Math.max(0, Math.min(state.board.height - state.clipboard.height, origin.y));
-    result = pasteSelection(state.board, state.clipboard, x, y);
+    // Below and right of the selection so the copy is visible; otherwise centred.
+    const clip = state.clipboard;
+    const centre = screenToCell(canvas.clientWidth / 2, canvas.clientHeight / 2);
+    const origin = rect
+      ? { x: rect.x + clip.width, y: rect.y + clip.height }
+      : { x: centre.x - Math.floor(clip.width / 2), y: centre.y - Math.floor(clip.height / 2) };
+    const x = Math.max(0, Math.min(state.board.width - clip.width, origin.x));
+    const y = Math.max(0, Math.min(state.board.height - clip.height, origin.y));
+    result = pasteSelection(state.board, clip, x, y);
   } else if (command === 'rotate' || command === 'flip') {
     if (command === 'rotate' && (rect.x + rect.height > state.board.width || rect.y + rect.width > state.board.height)) {
       showToast('Move the selection away from the edge before rotating', { kind: 'error' });
@@ -1034,8 +1069,9 @@ function resetToStart() {
 
 function markDesignDirty(dirty = true) {
   state.designDirty = dirty;
-  setSaveStatus(dirty ? (navigator.onLine === false ? 'offline' : 'dirty') : 'saved');
+  setSaveStatus(dirty ? (navigator.onLine === false ? 'offline' : 'dirty') : (state.session?.creationId ? 'saved' : 'new'));
   if (dirty) scheduleLocalRecovery();
+  else window.clearTimeout(recoveryTimer);
   renderPublishButton();
 }
 
@@ -1062,6 +1098,7 @@ function renderPublishButton() {
 
 function scheduleLocalRecovery() {
   window.clearTimeout(recoveryTimer);
+  if (state.boardOwner !== 'studio') return;
   recoveryTimer = window.setTimeout(async () => {
     try {
       const authored = ownedSnapshot(state.authoredStart || state.board);
@@ -1109,6 +1146,7 @@ async function restoreLocalRecovery() {
     const recovery = await readRecovery(LOCAL_RECOVERY_KEY) || (raw && JSON.parse(raw));
     if (!recovery) return false;
     if (!recovery.creationId && !(Number(recovery.population) > 0)) return false;
+    swapWorkspace('studio');
     const settings = createDesignSettings(recovery.settings || {
       gridPreset: 'custom',
       width: recovery.width,
@@ -1175,14 +1213,23 @@ function resizeBoardKeepingCells(width, height) {
 function applyGridSizeChoice(gridPreset) {
   const next = mergeDesignSettings(state.designSettings, { gridPreset });
   if (next.width === state.board.width && next.height === state.board.height) return;
+  const gateBoard = state.circuit?.board;
+  if (gateBoard && (next.width < gateBoard.width || next.height < gateBoard.height)) {
+    syncDesignControls();
+    showToast(`This gate needs a grid of at least ${gateBoard.width} × ${gateBoard.height}.`, { kind: 'error' });
+    return;
+  }
+  const before = getPopulation(state.board);
   beginAuthoringCommand();
   state.designSettings = next;
   state.board = resizeBoardKeepingCells(next.width, next.height);
-  exitCircuit();
   finishAuthoringCommand();
-  fitBoard();
+  if (state.circuit) fitCircuit(); else fitBoard();
   syncDesignControls();
-  showToast(`Grid is now ${next.width} × ${next.height}`, { kind: 'success' });
+  const removed = before - getPopulation(state.board);
+  showToast(removed > 0
+    ? `Removed ${formatCellCount(removed)} outside the new grid. Undo to restore.`
+    : `Grid is now ${next.width} × ${next.height}`, { kind: removed > 0 ? 'info' : 'success' });
 }
 
 function applyEdgesChoice(value) {
@@ -1380,14 +1427,17 @@ async function saveCurrentCreation({ publish = false, resumed = false } = {}) {
     settings: getCurrentDesignSettings(),
   };
   if (publish) {
+    const previousStatus = state.publishStatus;
     setPublishStatus('validating');
     const readiness = getCreationPublishReadiness({
       ...input,
       currentVersion: { rle: input.rle },
     });
     if (!readiness.ready) {
-      const message = readiness.issues[0]?.message || 'Add publish details first.';
-      setPublishStatus('failed');
+      const issue = readiness.issues[0];
+      const message = PUBLISH_ISSUE_COPY[`${issue?.field}:${issue?.code}`] || 'Fill in the publish details first.';
+      // Nothing was attempted, so the button keeps its label.
+      setPublishStatus(previousStatus);
       showToast(message, { kind: 'error' });
       if (MOBILE_QUERY.matches) openInspector(true);
       const issueField = readiness.issues[0]?.field;
@@ -1539,7 +1589,7 @@ function loadCreationOntoBoard(creation) {
   state.history.clear();
   updateHistoryControls();
   setSpeed(settings.speed);
-  fitLiveCells();
+  fitLiveCells({ deferred: true });
   syncDesignControls();
   markDesignDirty(false);
   updateStats();
@@ -1562,7 +1612,9 @@ function renderStudio() {
   if (studio && state.studioView === 'projects') renderProjectsPage();
   if (studio && state.studioView === 'project') {
     const creation = getActiveCreation();
-    elements.unpublishProject.disabled = creation?.visibility !== 'public';
+    // The ⋯ menu only appears once something in it can act.
+    elements.projectMenuToggle.hidden = !creation;
+    elements.unpublishProject.hidden = creation?.visibility !== 'public';
     elements.archiveProject.disabled = !creation;
     elements.deleteProject.disabled = !creation;
     renderInspector();
@@ -1588,7 +1640,7 @@ function renderProjectsPage() {
     const updated = formatDate(creation.updatedAt);
     button.innerHTML = `
       <strong>${escapeHtml(creation.title)}</strong>
-      <span>${Number(creation.currentVersion?.population || 0).toLocaleString()} cells · ${creation.currentVersion?.width || 0} × ${creation.currentVersion?.height || 0}</span>
+      <span>${formatCellCount(creation.currentVersion?.population)} · ${creation.currentVersion?.width || 0} × ${creation.currentVersion?.height || 0}</span>
       <span>${creation.visibility === 'public' ? 'Published' : 'Private'} · updated ${escapeHtml(updated)}</span>
     `;
     elements.projectsList.append(button);
@@ -1614,7 +1666,7 @@ function renderVersionHistory(creation) {
     const current = version.id === creation.currentVersion?.id;
     row.className = `version-row${current ? ' current' : ''}`;
     row.innerHTML = `
-      <span><strong>Version ${version.versionNumber || 1}</strong><small>${current ? 'Current' : `${Number(version.population || 0).toLocaleString()} cells`}</small></span>
+      <span><strong>Version ${version.versionNumber || 1}</strong><small>${current ? 'Current' : formatCellCount(version.population)}</small></span>
       ${current ? '' : `<button class="button button-small" type="button" data-restore-version-id="${escapeHtml(version.id)}">Restore</button>`}
     `;
     elements.versionHistory.append(row);
@@ -1685,28 +1737,38 @@ function openCircuit(gates, { fit = true, inputs = null } = {}) {
 
 function fitCircuit({ deferred = false } = {}) {
   if (!state.circuit) return;
-  const { tiles } = getCircuitGeometry(state.circuit);
+  const { tiles, ports } = getCircuitGeometry(state.circuit);
   const first = tiles[0];
   const last = tiles[tiles.length - 1];
-  // Room for the "A →" lane on the west, the probe label on the east and the
-  // south lanes below (the half-adder has none).
-  const region = {
+  const top = first.y - 16;
+  // Room for the "A →" lane on the west and the probe label on the east. The
+  // south edge reaches the lowest packet queued in an active lane so the
+  // travelling signals stay in view (56 cells of lane when nothing is queued).
+  let bottom = first.y + first.height + (state.circuit.tiles ? 56 : 16);
+  const board = state.circuit.authoredBoard;
+  for (const port of ports) {
+    if (port.side !== 'south' || !state.circuit.inputs?.[port.name]) continue;
+    const column = Math.floor(port.x);
+    for (let y = board.height - 1; y > bottom; y -= 1) {
+      let live = false;
+      for (let x = column - 4; x <= column + 4 && !live; x += 1) live = board.cells[y * board.width + x] === 1;
+      if (live) { bottom = y + 8; break; }
+    }
+  }
+  fitRegion({
     x: first.x - 44,
-    y: first.y - 16,
+    y: top,
     width: last.x + last.width - first.x + 44 + 56,
-    height: first.height + 16 + (state.circuit.tiles ? 56 : 16),
-  };
-  const options = { padding: 16, maxZoom: 1 };
-  // A restored project is still mid-layout; the next canvas resize applies the fit.
-  if (deferred) state.pendingFit = { region, options };
-  else fitRegion(region, options);
+    height: bottom - top,
+  }, { padding: 16, maxZoom: 1, deferred });
 }
 
 function setCircuitInput(name, value) {
   if (!state.circuit) return;
   const gates = circuitGates();
   state.circuitInputs[gates.join('>')][name] = Boolean(value);
-  openCircuit(gates, { fit: false });
+  // Refit: an input train appears or disappears, and the fit follows it.
+  openCircuit(gates);
 }
 
 function changeChain(gates) {
@@ -1788,8 +1850,9 @@ async function fillTruthTable() {
     if (error?.name !== 'AbortError') showToast(`Run stopped: ${getErrorMessage(error)}`, { kind: 'error' });
   } finally {
     state.circuitRunning = false;
-    // Put the authored experiment back on the board and in the worker.
-    openCircuit(gates, { fit: false });
+    // Put the authored experiment back on the board and in the worker (unless
+    // the user has since switched to the Playground board).
+    if (state.circuit === experiment) openCircuit(gates, { fit: false });
   }
 }
 
@@ -1979,10 +2042,13 @@ function setZoom(nextZoom, anchorX = canvas.clientWidth / 2, anchorY = canvas.cl
   elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
 }
 
-function fitRegion(region, { padding = 24, maxZoom = MAX_ZOOM } = {}) {
-  if (!canvas.clientWidth) {
+function fitRegion(region, { padding = 24, maxZoom = MAX_ZOOM, deferred = false } = {}) {
+  // Deferred: the frame is still being laid out (route change, project open),
+  // so the next canvas resize measures the real size and applies the fit.
+  if (deferred || !canvas.clientWidth) {
     state.pendingFit = { region, options: { padding, maxZoom } };
     state.pendingCenter = false;
+    if (deferred) window.requestAnimationFrame(resizeCanvas);
     return;
   }
   const viewport = getWorldViewport();
@@ -2003,14 +2069,14 @@ function fitRegion(region, { padding = 24, maxZoom = MAX_ZOOM } = {}) {
   elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
 }
 
-function fitBoard() {
-  fitRegion({ x: 0, y: 0, width: state.board.width, height: state.board.height }, { padding: 24 });
+function fitBoard({ deferred = false } = {}) {
+  fitRegion({ x: 0, y: 0, width: state.board.width, height: state.board.height }, { padding: 24, deferred });
 }
 
-function fitLiveCells() {
+function fitLiveCells({ deferred = false } = {}) {
   const coordinates = getLiveCoordinates();
   if (!coordinates.length) {
-    fitBoard();
+    fitBoard({ deferred });
     return;
   }
   const bounds = getPatternBounds(coordinates);
@@ -2020,7 +2086,7 @@ function fitLiveCells() {
     y: bounds.minY - margin,
     width: bounds.width + margin * 2,
     height: bounds.height + margin * 2,
-  }, { padding: 24, maxZoom: 1.6 });
+  }, { padding: 24, maxZoom: 1.6, deferred });
 }
 
 function setSpeed(nextSpeed) {
@@ -2074,7 +2140,9 @@ function getCellAliveAt(localX, localY) {
 }
 
 async function stepSimulation() {
-  if (state.simulationStepPending || state.circuitRunning) return;
+  if (state.circuitRunning) return;
+  // Fast repeats keep one step queued instead of dropping it.
+  if (state.simulationStepPending) { state.stepQueued = true; return; }
   state.simulationStepPending = true;
   try {
     const load = state.simulationLoad;
@@ -2087,6 +2155,10 @@ async function stepSimulation() {
     if (error?.name !== 'AbortError') showToast(`Simulation stopped: ${getErrorMessage(error)}`, { kind: 'error' });
   } finally {
     state.simulationStepPending = false;
+    if (state.stepQueued) {
+      state.stepQueued = false;
+      stepSimulation();
+    }
   }
 }
 
@@ -2122,7 +2194,7 @@ function openRleDialog(mode) {
     const coordinates = getLiveCoordinates();
     elements.rleDialogTitle.textContent = 'Export RLE';
     elements.rleNote.textContent = coordinates.length
-      ? `${coordinates.length.toLocaleString()} live cells as RLE text.`
+      ? `${formatCellCount(coordinates.length)} as RLE text.`
       : 'The board is empty, so there is nothing to export yet.';
     elements.rleField.value = encodeRle(coordinates);
     elements.rleCopy.hidden = false;
@@ -2154,7 +2226,6 @@ function importRleFromDialog() {
     setTool('stamp');
     updatePresetSelection();
     elements.rleDialog.close();
-    showToast('Click the board to place the pattern', { kind: 'info' });
   } catch (error) {
     elements.rleError.hidden = false;
     elements.rleError.textContent = error instanceof Error ? error.message : 'Could not read that RLE.';
@@ -2349,7 +2420,7 @@ function drawStampPreview(cellSize) {
 
 function drawCircuitMarkers(cellSize) {
   const experiment = state.circuit;
-  if (!experiment || experiment.board.width !== state.board.width || experiment.board.height !== state.board.height) return;
+  if (!experiment || experiment.board.width > state.board.width || experiment.board.height > state.board.height) return;
   const { tiles, ports } = getCircuitGeometry(experiment);
   const labelSize = 12;
   ctx.save();
@@ -2463,7 +2534,6 @@ function setTool(tool) {
 function chooseTool(tool) {
   if (tool === 'stamp' && !state.selectedPreset) {
     setTool('stamp');
-    showToast('Pick a pattern to stamp', { kind: 'info' });
     if (MOBILE_QUERY.matches) openRail(true);
     return;
   }
@@ -2490,6 +2560,68 @@ function renderToolStrip() {
 /* ---------------------------------------------------------------------------
  * Mode and routing
  * ------------------------------------------------------------------------- */
+
+const WORKSPACE_KEYS = ['board', 'authoredStart', 'history', 'designSettings', 'selection', 'circuit', 'circuitOutputs',
+  'truthRows', 'session', 'previewConfig', 'designDirty', 'saveStatus', 'publishStatus', 'zoom', 'panX', 'panY'];
+
+// Playground and Studio each keep their own board, history and camera; a
+// Studio project never overwrites the Playground sketch.
+function swapWorkspace(owner) {
+  if (owner === state.boardOwner) return;
+  if (state.circuitRunning) {
+    state.simulation?.cancel();
+    state.circuitOutputs = null;
+  }
+  state.workspaces[state.boardOwner] = Object.fromEntries(WORKSPACE_KEYS.map((key) => [key, state[key]]));
+  const fresh = createBoard(DEFAULT_DESIGN_SETTINGS.width, DEFAULT_DESIGN_SETTINGS.height);
+  const next = state.workspaces[owner] || {
+    board: fresh,
+    authoredStart: cloneBoard(fresh),
+    history: createBoardHistory(),
+    designSettings: DEFAULT_DESIGN_SETTINGS,
+    selection: null,
+    circuit: null,
+    circuitOutputs: null,
+    truthRows: null,
+    session: null,
+    previewConfig: {},
+    designDirty: false,
+    saveStatus: 'new',
+    publishStatus: 'draft',
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+  };
+  state.pendingCenter = !state.workspaces[owner];
+  Object.assign(state, next);
+  state.boardOwner = owner;
+  state.playing = false;
+  loadSimulation();
+  updateStats();
+  updatePlayButton();
+  updateHistoryControls();
+  renderToolStrip();
+  syncDesignControls();
+  setSaveStatus(state.saveStatus);
+  renderPublishButton();
+  elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
+}
+
+// "Open in Studio": a new project that starts from the Playground sketch.
+function openSketchInStudio() {
+  const sketch = ownedSnapshot();
+  sketch.generation = 0;
+  const settings = state.designSettings;
+  swapWorkspace('studio');
+  state.designSettings = settings;
+  replaceBoard(sketch);
+  state.authoredStart = ownedSnapshot(sketch);
+  state.history.clear();
+  startProject({ title: 'Untitled project', boardLoaded: true });
+  markDesignDirty(true);
+  fitLiveCells({ deferred: true });
+  navigateTo('/studio');
+}
 
 function setMode(mode) {
   const previousMode = state.mode;
@@ -2519,6 +2651,8 @@ function setMode(mode) {
   elements.communityPanel.hidden = mode !== 'community';
   if (mode === 'community' && state.playing) setPlaying(false);
   if (mode === 'community') renderCommunity();
+  if (mode !== 'community') swapWorkspace(mode);
+  elements.openInStudio.hidden = mode !== 'playground';
   if (mode === 'studio' && !state.session && state.studioView === 'project') {
     const activeId = communityState.activeCreationId;
     if (!(activeId && openProject(activeId))) startProject({ title: 'Untitled project' });
@@ -2707,7 +2841,7 @@ function renderCommunityGrid(creations) {
       ${getCommunityPreviewHtml(creation)}
       <div class="community-card-text">
         <strong>${escapeHtml(creation.title)}</strong>
-        <span>${isFamous(creation) ? 'Library · LifeWiki' : `by ${escapeHtml(creation.ownerName)}`} · ${Number(creation.currentVersion?.population || 0).toLocaleString()} cells</span>
+        <span>${isFamous(creation) ? 'Library · LifeWiki' : `by ${escapeHtml(ownerLabel(creation.ownerId, creation.ownerName))}`} · ${formatCellCount(creation.currentVersion?.population)}</span>
       </div>
       <button class="button" type="button" data-community-action="open" data-creation-id="${escapeHtml(creation.id)}">Open</button>
     `;
@@ -2727,12 +2861,12 @@ function getCommunityPreviewHtml(creation) {
 }
 
 function getPreviewGridHtml(preview) {
-  // Small patterns are padded onto a 16 x 12 field so a glider reads as a
-  // pattern on a board rather than three giant blocks.
+  // Every preview is padded onto the same 24 x 16 field (the largest a preview
+  // is downsampled to), so cells are the same size on every card.
   const sourceColumns = Number(preview?.grid?.columns || 6);
   const sourceRows = Number(preview?.grid?.rows || 5);
-  const columns = Math.max(16, sourceColumns);
-  const rows = Math.max(12, sourceRows);
+  const columns = Math.max(24, sourceColumns);
+  const rows = Math.max(16, sourceRows);
   const offsetX = Math.floor((columns - sourceColumns) / 2);
   const offsetY = Math.floor((rows - sourceRows) / 2);
   return `
@@ -2776,9 +2910,10 @@ function renderCommunityDetail(creation) {
     ?? false;
   const canStar = !famous || communityAuth.cloudConfigured;
   const canReport = !famous && communityAuth.cloudConfigured;
+  const authorName = escapeHtml(ownerLabel(creation.ownerId, creation.ownerName));
   const author = creation.ownerUsername
-    ? `<button type="button" data-community-action="creator" data-username="${escapeHtml(creation.ownerUsername)}">${escapeHtml(creation.ownerName)}</button>`
-    : escapeHtml(creation.ownerName);
+    ? `<button type="button" data-community-action="creator" data-username="${escapeHtml(creation.ownerUsername)}">${authorName}</button>`
+    : authorName;
 
   elements.communityDetail.innerHTML = `
     <div class="detail-top">
@@ -2794,7 +2929,7 @@ function renderCommunityDetail(creation) {
         <p class="detail-description" id="detail-description">${escapeHtml(creation.description || 'No description yet.')}</p>
         <div class="detail-tags" id="detail-tags">${(creation.tags || []).map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>
         <div class="detail-meta">
-          <span>${Number(creation.currentVersion?.population || 0).toLocaleString()} cells</span>
+          <span>${formatCellCount(creation.currentVersion?.population)}</span>
           <span>${creation.currentVersion?.width || 0} × ${creation.currentVersion?.height || 0}</span>
           ${famous ? '' : `<span>${creation.starCount || 0} stars</span><span>${creation.cloneCount || 0} remixes</span>`}
         </div>
@@ -2821,7 +2956,7 @@ function renderCommunityDetail(creation) {
       <div id="comments-list">
         ${comments.length === 0 ? '<p class="community-status">No comments yet.</p>' : comments.map((comment) => `
           <article class="comment">
-            <strong>${escapeHtml(comment.authorName)}</strong>
+            <strong>${escapeHtml(ownerLabel(comment.profileId, comment.authorName))}</strong>
             <p>${escapeHtml(comment.body)}</p>
           </article>`).join('')}
       </div>
@@ -2852,7 +2987,7 @@ async function openPublicCreationRoute(identifier) {
       state.communityComments[creation.id] = result.comments || [];
     }
     renderCommunityDetail(creation);
-    document.title = `${creation.title} by ${creation.ownerName} · Life Lab`;
+    document.title = `${creation.title} by ${ownerLabel(creation.ownerId, creation.ownerName)} · Life Lab`;
   } catch (error) {
     elements.communityDetail.innerHTML = `<div class="detail-state"><h1>Pattern unavailable</h1><p>${escapeHtml(getErrorMessage(error))}</p><button class="button" type="button" data-community-action="browse">Back to Community</button></div>`;
   }
@@ -2954,13 +3089,11 @@ function playCommunityDesign(creationId) {
   if (!source) return;
 
   try {
-    state.session = null;
+    swapWorkspace('playground');
     loadCreationOntoBoard(source);
     state.selectedCommunityId = creationId;
     navigateTo('/');
-    fitLiveCells();
     setPlaying(true);
-    showToast(`Playing ${source.title}`, { kind: 'success' });
   } catch (error) {
     showToast(`Could not play: ${getErrorMessage(error)}`, { kind: 'error' });
   }
@@ -3026,6 +3159,7 @@ async function remixCommunityDesign(creationId) {
   if (!creation) return;
 
   const openRemix = (remix) => {
+    swapWorkspace('studio');
     loadCreationOntoBoard(remix);
     startProject({ title: remix.title, creationId: remix.id, source: creation, boardLoaded: true });
     setProjectFields(remix);
@@ -3150,11 +3284,12 @@ function importSharedBuildFromHash() {
 
   try {
     const pattern = parseRle(shared.rle);
+    swapWorkspace('studio');
     state.board = clearBoard(state.board);
     state.board = placePattern(state.board, pattern.coordinates, 0, 0);
     state.authoredStart = ownedSnapshot();
     loadSimulation();
-    fitLiveCells();
+    fitLiveCells({ deferred: true });
     updateStats();
     startProject({ title: shared.title || 'Shared pattern', boardLoaded: true });
     setProjectFields({ title: shared.title, description: shared.description, tags: shared.tags });
@@ -3290,38 +3425,46 @@ function drawPatternThumbnail(thumbCanvas, coordinates) {
   }
 }
 
+// The densest 18 x 18 patch of the gate at 3px per cell, so the card reads as a
+// Life shape rather than the whole 150-cell tile squeezed into dust.
 function drawGateThumbnail(thumbCanvas, id) {
   const size = 54;
+  const cell = 3;
+  const span = size / cell;
   const ratio = window.devicePixelRatio || 1;
   thumbCanvas.width = size * ratio;
   thumbCanvas.height = size * ratio;
   const preview = thumbCanvas.getContext('2d');
   preview.setTransform(ratio, 0, 0, ratio, 0, 0);
-  preview.fillStyle = palette.canvas;
-  preview.fillRect(0, 0, size, size);
-  const cacheKey = `${id}:${palette.cell}`;
-  let tileImage = gateThumbnailCache.get(cacheKey);
-  if (!tileImage) {
-    const experiment = buildCircuitExperiment(id, {});
+  let crop = gateThumbnailCache.get(id);
+  if (!crop) {
+    const { board } = buildCircuitExperiment(id, {});
     const { origin, tile } = getCircuitMarkers(id);
-    const offscreen = document.createElement('canvas');
-    offscreen.width = tile;
-    offscreen.height = tile;
-    const tileCtx = offscreen.getContext('2d');
-    tileCtx.fillStyle = palette.canvas;
-    tileCtx.fillRect(0, 0, tile, tile);
-    tileCtx.fillStyle = palette.cell;
-    const board = experiment.board;
-    for (let y = 0; y < tile; y += 1) {
-      for (let x = 0; x < tile; x += 1) {
-        if (board.cells[(origin.y + y) * board.width + origin.x + x]) tileCtx.fillRect(x, y, 1.6, 1.6);
+    const stride = tile + 1;
+    const sums = new Uint32Array(stride * stride);
+    for (let y = 1; y <= tile; y += 1) {
+      for (let x = 1; x <= tile; x += 1) {
+        sums[y * stride + x] = board.cells[(origin.y + y - 1) * board.width + origin.x + x - 1]
+          + sums[(y - 1) * stride + x] + sums[y * stride + x - 1] - sums[(y - 1) * stride + x - 1];
       }
     }
-    tileImage = offscreen;
-    gateThumbnailCache.set(cacheKey, tileImage);
+    let best = -1;
+    for (let y = 0; y + span <= tile; y += 1) {
+      for (let x = 0; x + span <= tile; x += 1) {
+        const count = sums[(y + span) * stride + x + span] - sums[y * stride + x + span] - sums[(y + span) * stride + x] + sums[y * stride + x];
+        if (count > best) { best = count; crop = { board, x: origin.x + x, y: origin.y + y }; }
+      }
+    }
+    gateThumbnailCache.set(id, crop);
   }
-  preview.imageSmoothingEnabled = true;
-  preview.drawImage(tileImage, 3, 3, size - 6, size - 6);
+  preview.fillStyle = palette.canvas;
+  preview.fillRect(0, 0, size, size);
+  preview.fillStyle = palette.cell;
+  for (let y = 0; y < span; y += 1) {
+    for (let x = 0; x < span; x += 1) {
+      if (crop.board.cells[(crop.y + y) * crop.board.width + crop.x + x]) preview.fillRect(x * cell, y * cell, cell - 1, cell - 1);
+    }
+  }
 }
 
 function renderLogicList() {
@@ -3519,10 +3662,7 @@ function bindEvents() {
       return;
     }
 
-    if (state.pointer.mode === 'stamp' && !state.selectedPreset) {
-      showToast('Pick a pattern to stamp', { kind: 'info' });
-      return;
-    }
+    if (state.pointer.mode === 'stamp' && !state.selectedPreset) return;
 
     applyToolAt(local.x, local.y);
   });
@@ -3623,7 +3763,6 @@ function bindEvents() {
       state.stampFlipX = previous.flip;
     }
     updatePresetSelection();
-    showToast(`Placed ${preset.name}`, { kind: 'success' });
   });
 
   // Transport
@@ -3659,6 +3798,7 @@ function bindEvents() {
   elements.undo.addEventListener('click', undoBoard);
   elements.redo.addEventListener('click', redoBoard);
   elements.clearBoard.addEventListener('click', () => { closeMenus(); clearWorld(); });
+  elements.openInStudio.addEventListener('click', () => { closeMenus(); openSketchInStudio(); });
   elements.importRle.addEventListener('click', () => { closeMenus(); openRleDialog('import'); });
   elements.exportRle.addEventListener('click', () => { closeMenus(); openRleDialog('export'); });
   elements.shortcuts.addEventListener('click', () => { closeMenus(); elements.shortcutsDialog.showModal(); });
@@ -3744,7 +3884,6 @@ function bindEvents() {
     if (!card) return;
     openCircuit([card.dataset.gateId]);
     closeSheets();
-    showToast(`${GATE_CARDS[card.dataset.gateId]?.name || 'Gate'} loaded. Flip the inputs, then run.`, { kind: 'success' });
   });
 
   // Studio
@@ -3904,8 +4043,10 @@ async function boot() {
   resizeCanvas();
   markDesignDirty(false);
 
-  await restoreLocalRecovery();
+  const recovered = await restoreLocalRecovery();
   importSharedBuildFromHash();
+  // Recovered work lives in the Studio workspace; show it rather than the Playground sketch.
+  if (recovered && window.location.pathname === '/') window.history.replaceState(null, '', '/studio');
   await routeCurrentLocation();
   initializeCommunityBackend().then(() => {
     const path = window.location.pathname;
@@ -3925,6 +4066,8 @@ window.__lifeLab = {
     tool: state.tool,
     mode: state.mode,
     zoom: state.zoom,
+    panX: state.panX,
+    panY: state.panY,
     playing: state.playing,
     circuit: state.circuit?.id || null,
     gates: circuitGates(),

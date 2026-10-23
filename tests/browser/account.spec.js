@@ -7,10 +7,21 @@ test.beforeEach(async ({ page }) => {
 
 test.afterEach(async ({ page }) => expect(page.errors, 'browser runtime errors').toEqual([]));
 
+// Local builds hide the Sign in entry (no accounts). Reveal it so the dialog's own behaviour can be tested.
+async function revealAccountEntry(page) {
+  const entry = page.locator('#account-entry');
+  if ((await backend(page)) === 'local') {
+    await expect(entry).toBeHidden();
+    await entry.evaluate((node) => { node.hidden = false; });
+  }
+  await expect(entry).toBeVisible();
+}
+
 test('account dialog opens from every workspace and is honest about availability', async ({ page, isMobile }) => {
   for (const path of ['/', '/studio', '/community']) {
     await page.goto(path);
     await openTopMenu(page, isMobile);
+    await revealAccountEntry(page);
     await page.locator('#account-entry').click();
     const dialog = page.locator('#account-dialog');
     await expect(dialog).toBeVisible();
@@ -34,6 +45,7 @@ test('account dialog opens from every workspace and is honest about availability
 test('account dialog traps focus, closes with Escape, and restores its trigger', async ({ page, isMobile }) => {
   await page.goto('/');
   await openTopMenu(page, isMobile);
+  await revealAccountEntry(page);
   await page.locator('#account-entry').focus();
   await page.keyboard.press('Enter');
   const dialog = page.locator('#account-dialog');
@@ -60,6 +72,7 @@ test('phone: closing the account dialog returns focus to the top menu toggle', a
   test.fixme(true, 'App restores focus to #account-entry, which is display:none inside the closed top menu, so focus falls back to <body>.');
   await page.goto('/');
   await openTopMenu(page, isMobile);
+  await revealAccountEntry(page);
   await page.locator('#account-entry').click();
   await expect(page.locator('#account-dialog')).toBeVisible();
   await page.keyboard.press('Escape');

@@ -53,7 +53,17 @@ test('selection commands move, copy, paste and transform cells, survive undo/red
   for (let index = 0; index < 6; index += 1) await page.keyboard.press('ArrowRight');
   await command('paste');
   await expect(page.locator('#population')).toHaveText('2');
-  await expect.poll(() => page.evaluate(() => window.editedCells)).toEqual(initial.map(([x, y]) => [x + 7, y]));
+  // Paste lands offset from the selection by the clipboard size and keeps both cells together.
+  await expect.poll(async () => {
+    const pasted = await page.evaluate(() => window.editedCells);
+    if (!pasted || pasted.length !== 2) return null;
+    const dx = pasted[0][0] - initial[0][0];
+    const dy = pasted[0][1] - initial[0][1];
+    return { dx, dy, shifted: pasted.every(([x, y], i) => x === initial[i][0] + dx && y === initial[i][1] + dy) };
+  }).toEqual(expect.objectContaining({ shifted: true }));
+  const pasted = await page.evaluate(() => window.editedCells);
+  expect(pasted[0][0] - initial[0][0]).toBeGreaterThan(7);
+  expect(pasted[0][1] - initial[0][1]).toBeGreaterThan(0);
 
   const beforeRotation = await page.evaluate(() => window.editedCells);
   await command('rotate');

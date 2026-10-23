@@ -102,7 +102,7 @@
           <span class="desktop-only">Projects</span>
         </button>
         <input id="project-title" class="project-title" type="text" value="Untitled project" aria-label="Project title" spellcheck="false" autocomplete="off" />
-        <span id="save-state" class="save-state desktop-only" role="status">Saved on this device</span>
+        <span id="save-state" class="save-state desktop-only" role="status">Not saved yet</span>
         <div class="project-actions">
           <button id="inspector-toggle" class="button mobile-only" type="button" aria-controls="inspector" aria-expanded="false">
             <svg class="icon" aria-hidden="true"><use href="#i-sliders" /></svg>
@@ -124,7 +124,6 @@
 
       <main id="editor" class="editor">
         <aside id="rail" class="rail" aria-label="Patterns">
-          <div id="rail-handle" class="rail-handle mobile-only" aria-hidden="true"></div>
           <div class="rail-head">
             <h2 id="rail-title" class="rail-title">Patterns</h2>
             <button id="rail-close" class="icon-button mobile-only" type="button" aria-label="Close patterns">
@@ -228,6 +227,9 @@
                     <button id="export-rle" type="button" role="menuitem">
                       <svg class="icon" aria-hidden="true"><use href="#i-export" /></svg><span>Export RLE</span>
                     </button>
+                    <button id="open-in-studio" type="button" role="menuitem">
+                      <svg class="icon" aria-hidden="true"><use href="#i-sliders" /></svg><span>Open in Studio</span>
+                    </button>
                     <button id="fit-mobile" class="mobile-only" type="button" role="menuitem">
                       <svg class="icon" aria-hidden="true"><use href="#i-fit" /></svg><span>Fit board</span>
                     </button>
@@ -320,7 +322,6 @@
 
         <!-- STUDIO: inspector -->
         <aside id="inspector" class="inspector" aria-label="Inspector" hidden>
-          <div class="rail-handle mobile-only" aria-hidden="true"></div>
           <div class="inspector-head mobile-only">
             <h2>Experiment</h2>
             <button id="inspector-close" class="icon-button" type="button" aria-label="Close inspector">
@@ -329,7 +330,7 @@
           </div>
 
           <section class="inspector-section" aria-labelledby="experiment-heading">
-            <h3 id="experiment-heading">Experiment</h3>
+            <h3 id="experiment-heading" class="desktop-only">Experiment</h3>
             <label class="field-row">
               <span>Grid size</span>
               <select id="grid-size">

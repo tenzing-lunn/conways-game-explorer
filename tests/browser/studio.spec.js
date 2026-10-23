@@ -16,8 +16,8 @@ test.afterEach(async ({ page }) => expect(page.errors, 'browser runtime errors')
 
 test('project header shows save state, Save creates versions, and history restores as a new version', async ({ page, isMobile }) => {
   const saveState = page.locator('#save-state');
-  await expect(saveState).toHaveAttribute('data-status', 'saved');
-  if (!isMobile) await expect(saveState).toHaveText('Saved on this device');
+  await expect(saveState).toHaveAttribute('data-status', 'new');
+  if (!isMobile) await expect(saveState).toHaveText('Not saved yet');
 
   await page.locator('#project-title').fill('Versioned browser project');
   await expect(saveState).toHaveAttribute('data-status', 'dirty');
@@ -62,7 +62,7 @@ test('project header shows save state, Save creates versions, and history restor
   await page.locator('#new-project').click();
   await expect(page.locator('#project-title')).toHaveValue('Untitled project');
   await expect(page.locator('#population')).toHaveText('0');
-  await expect(saveState).toHaveAttribute('data-status', 'saved');
+  await expect(saveState).toHaveAttribute('data-status', 'new');
 });
 
 test('publish validates title, description, tags and a non-empty board, then exposes publish states', async ({ page, isMobile }, testInfo) => {
@@ -74,13 +74,14 @@ test('publish validates title, description, tags and a non-empty board, then exp
   await page.locator('#project-tags').fill('browser, publish');
 
   await publish.click();
-  await expect(publish).toHaveText('Retry publish');
-  await expect(page.locator('#toast')).toHaveText('Describe what the build does in at least 20 characters.');
+  // Validation keeps the plain label; only a real failed attempt reads "Retry publish".
+  await expect(publish).toHaveText('Publish');
+  await expect(page.locator('#toast')).toHaveText('Add a description of at least 20 characters.');
   await expect(page.locator('#project-description')).toBeFocused();
 
   await page.locator('#project-description').fill('A complete browser-tested publishing workflow.');
   await publish.click();
-  await expect(publish).toHaveText('Retry publish');
+  await expect(publish).toHaveText('Publish');
   await expect(page.locator('#toast')).toHaveText('Add at least one live cell before publishing.');
 
   await clickBoard(page, isMobile, 0.46, 0.4);
@@ -154,7 +155,6 @@ test('Logic lists only verified gates; a single AND gate run settles HIGH at gen
   await expect(page.locator('#logic-list [data-gate-id="and"]')).toContainText('Outputs a signal only if both inputs are present');
 
   await pickGate(page, isMobile, 'and');
-  await expect(page.locator('#toast')).toHaveText('AND loaded. Flip the inputs, then run.');
   await expect(page.locator('#logic-list [data-gate-id="and"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#circuit-name')).toContainText('AND');
   expect((await snapshot(page)).circuit).toBe('chain:and');

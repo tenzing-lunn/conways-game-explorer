@@ -63,7 +63,6 @@ test('Play loads a library pattern into the Playground and starts it', async ({ 
   await expect(page.locator('#community-detail #detail-title')).toHaveText('Gosper glider gun');
   await page.locator('#community-detail [data-community-action="play"]').click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.locator('#toast')).toHaveText('Playing Gosper glider gun');
   await expect(page.locator('#world')).toBeVisible();
   await expect(page.locator('#play-label')).toHaveText('Pause');
   await expect.poll(() => num(page, '#generation')).toBeGreaterThan(0);

@@ -52,7 +52,7 @@ test('keyboard shortcuts step, reset, play, switch tools, undo and fit', async (
   }
   await page.keyboard.press('3');
   await expect(page.locator('#tool-group [data-tool="stamp"]')).toHaveAttribute('aria-checked', 'true');
-  await expect(page.locator('#toast')).toHaveText('Pick a pattern to stamp');
+  await expect(page.locator('#stamp-group')).toBeVisible();
   // On phones the stamp shortcut also opens the pattern sheet; the first Escape closes it.
   if (isMobile) await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
@@ -132,7 +132,7 @@ test('exports the board as RLE and imports RLE text as a stamp', async ({ page, 
   await page.locator('#export-rle').click();
   await expect(dialog).toBeVisible();
   await expect(page.locator('#rle-dialog-title')).toHaveText('Export RLE');
-  await expect(page.locator('#rle-note')).toHaveText('5 live cells as RLE text.');
+  await expect(page.locator('#rle-note')).toHaveText('5 cells as RLE text.');
   await expect(page.locator('#rle-field')).toHaveValue(/x = 3, y = 3[\s\S]*!$/);
   await expect(page.locator('#rle-copy')).toBeVisible();
   await expect(page.locator('#rle-stamp')).toBeHidden();

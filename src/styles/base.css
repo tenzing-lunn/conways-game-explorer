@@ -731,10 +731,11 @@ kbd {
 }
 
 /* Toast */
+/* Sits above the status line and transport so it never covers a control. */
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 24px;
+  bottom: 116px;
   z-index: 60;
   transform: translateX(-50%);
   padding: 8px 14px;
@@ -750,6 +751,21 @@ kbd {
 .toast[data-kind="error"] {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+@media (max-width: 899px) {
+  .toast {
+    bottom: calc(84px + env(safe-area-inset-bottom));
+  }
+
+  /* An open sheet covers the lower screen; keep the toast above it. */
+  body:has(#rail[data-open="true"]) .toast {
+    bottom: calc(min(72vh, 620px) + 12px);
+  }
+
+  body:has(#inspector[data-open="true"]) .toast {
+    bottom: calc(min(78vh, 680px) + 12px);
+  }
 }
 
 /* Generic page (projects, community) */

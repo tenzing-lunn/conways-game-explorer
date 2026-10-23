@@ -19,6 +19,7 @@ export function getSaveStateText(status, { cloud = false } = {}) {
   const savedLabel = cloud ? 'Saved to your account' : 'Saved on this device';
   const labels = {
     saved: savedLabel,
+    new: 'Not saved yet',
     dirty: 'Unsaved',
     saving: 'Saving…',
     failed: 'Save failed',
@@ -46,10 +47,14 @@ export function getLampLabel(state) {
   return { unset: '—', settling: 'settling', low: 'LOW', high: 'HIGH' }[state] || '—';
 }
 
+export function formatCellCount(population) {
+  const count = Number(population || 0);
+  return `${count.toLocaleString()} ${count === 1 ? 'cell' : 'cells'}`;
+}
+
 export function formatStatus(generation, population, { compact = false } = {}) {
   const gen = Number(generation || 0).toLocaleString();
-  const cells = Number(population || 0).toLocaleString();
-  return `${compact ? 'Gen' : 'Generation'} ${gen} · ${cells} cells`;
+  return `${compact ? 'Gen' : 'Generation'} ${gen} · ${formatCellCount(population)}`;
 }
 
 export function getFitZoom({

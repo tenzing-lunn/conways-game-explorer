@@ -35,7 +35,8 @@
 }
 
 .community-card {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -90,7 +91,8 @@
 }
 
 .community-card .button {
-  justify-self: start;
+  align-self: flex-start;
+  margin-top: auto;
 }
 
 .community-empty {

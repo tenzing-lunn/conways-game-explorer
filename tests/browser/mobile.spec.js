@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { num, openInspector, openPatterns, pickGate, pickPattern, watchErrors } from './helpers.js';
+import { backend, num, openInspector, openPatterns, pickGate, pickPattern, watchErrors } from './helpers.js';
 
 test.beforeEach(async ({ page, isMobile }) => {
   watchErrors(page);
@@ -111,7 +111,9 @@ test('theme and account move into the top ⋯ menu', async ({ page }) => {
   await page.locator('#top-menu-toggle').click();
   await expect(page.locator('#top-menu')).toHaveAttribute('data-open', 'true');
   await expect(page.locator('#theme-toggle')).toBeVisible();
-  await expect(page.locator('#account-entry')).toBeVisible();
+  // Local builds have no accounts, so the entry stays hidden even inside the menu.
+  if ((await backend(page)) === 'local') await expect(page.locator('#account-entry')).toBeHidden();
+  else await expect(page.locator('#account-entry')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('#top-menu')).toHaveAttribute('data-open', 'false');
 });
