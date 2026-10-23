@@ -97,7 +97,7 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
 
 .card {
   display: grid;
-  grid-template-columns: 56px 1fr;
+  grid-template-columns: 66px 1fr;
   gap: 12px;
   align-items: center;
   width: 100%;
@@ -118,8 +118,8 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
 }
 
 .card-thumb {
-  width: 56px;
-  height: 56px;
+  width: 66px;
+  height: 66px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--canvas);
@@ -130,8 +130,8 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
 
 .card-thumb canvas {
   display: block;
-  width: 54px;
-  height: 54px;
+  width: 64px;
+  height: 64px;
 }
 
 .card-text {
@@ -445,7 +445,7 @@ body[data-playing="true"] .icon-pause {
 
   .pattern-tabs > button {
     flex: 0 0 auto;
-    height: 32px;
+    height: 40px;
     padding: 0 12px;
     border: 1px solid var(--line);
     border-radius: 999px;

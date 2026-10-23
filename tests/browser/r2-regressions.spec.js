@@ -90,7 +90,8 @@ test('maximum-size binary recovery reloads and Step uses the recovered board', a
       settings: { gridPreset: 'custom', width: 2048, height: 2048, wrapping: true },
     });
   }, RECOVERY_KEY);
-  await page.reload();
+  // Recovered work lives in the Studio workspace; the Playground keeps its own board.
+  await page.goto('/studio');
   await expect(page.locator('#population')).toHaveText('4,194,304');
   await page.locator('#step').click();
   await expect(page.locator('#generation')).toHaveText('1');
@@ -151,7 +152,7 @@ test('clearing a large running board cancels stale Worker results', async ({ pag
       settings: { gridPreset: 'custom', width: 1200, height: 1200, wrapping: true, speed: 40 },
     });
   }, RECOVERY_KEY);
-  await page.reload();
+  await page.goto('/studio');
   await expect(page.locator('#population')).toHaveText('720,000');
   await page.locator('#play-toggle').click();
   await expect(page.locator('#play-label')).toHaveText('Pause');

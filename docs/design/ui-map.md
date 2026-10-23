@@ -1,7 +1,7 @@
 # Life Lab UI map
 
 Stable ids and data attributes, by screen. Tests and later agents can rely on these.
-`window.__lifeLab.snapshot()` returns `{ generation, population, width, height, tool, mode, zoom, panX, panY, playing, circuit, gates, selection }`; `window.__lifeLab.liveCells()` returns live `[x, y]` pairs.
+`window.__lifeLab.snapshot()` returns `{ generation, population, width, height, tool, mode, zoom, panX, panY, playing, circuit, gates, selection }`; `window.__lifeLab.liveCells()` returns live `[x, y]` pairs; `window.__lifeLab.circuitGeometry()` returns `{ tiles, outputs }` in cells for the open circuit (or `null`).
 
 ## Top bar (every screen)
 
@@ -37,7 +37,7 @@ Stable ids and data attributes, by screen. Tests and later agents can rely on th
 - `#status-mobile` — phone "Gen N · M cells" line.
 - `#rules-popover` — "How Life works".
 - `#transport`: `#play-toggle` (`#play-label`), `#step`, `#reset`, `#speed-toggle` (`#speed-label`) → `#speed-menu` with `[data-speed="1|2|5|10|20|40"]` (`aria-checked`), `#zoom-out`, `#zoom-label`, `#zoom-in`, `#fit`, `#patterns-open` (phone sheet).
-- `#status-line`: `#status-text`, `#generation`, `#population`, `#how-life-works`.
+- `#status-line`: `#status-text`, `#generation`, `#population`, `#population-unit` ("cell"/"cells"), `#how-life-works`.
 
 ## Studio
 
@@ -48,7 +48,7 @@ Stable ids and data attributes, by screen. Tests and later agents can rely on th
 - `#save-state` — `data-status="new|dirty|saving|saved|failed|offline"`; text "Not saved yet" until the first save.
 - `#inspector-toggle` — phone "Experiment" button that opens `#inspector`.
 - `#save-project`, `#publish-project` (desktop), `#publish-project-mobile` (in the inspector on phone).
-- `#project-menu-toggle` → `#project-menu` — hidden until the project is saved: `#unpublish-project` (only when public), `#archive-project`, `#delete-project`.
+- `#project-menu-toggle` → `#project-menu` — on desktop and phone, hidden until the project is saved: `#unpublish-project` (only when public), `#archive-project`, `#delete-project`.
 
 ### Inspector
 - `#inspector` — right panel; on phone a bottom sheet with `data-open`; `#inspector-close`.
