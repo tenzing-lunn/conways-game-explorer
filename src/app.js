@@ -12,11 +12,6 @@ import {
 import { boardFromRle, boardToRle, createBoardHistory, copySelection, pasteSelection, transformSelection } from './board-tools.js';
 import { createSimulationClient } from './simulation-client.js';
 import { buildCircuitExperiment, circuitExperiments, readCircuitOutputs } from './circuits.js';
-import {
-  describeDriftClaim,
-  describePeriodClaim,
-  describePopulationSnapshot,
-} from './dev-tools.js';
 import { createCommunityRepository, migrateLocalState } from './community-repository.js';
 import {
   addCreationComment,
@@ -33,223 +28,216 @@ import {
   transformCoordinates,
 } from './patterns.js';
 import {
-  getStampCta,
+  getContextualGroup,
   getHapticPattern,
   getLiveToolAction,
-  getNextTool,
+  getPinchZoom,
   getToolAfterWorkspaceChange,
-  getToolStatusMessage,
-  shouldHideStampPreview,
+  getToolForKey,
   getWheelAction,
 } from './interaction.js';
 import {
   createDesignSettings,
-  getDesignSettingSummary,
   mergeDesignSettings,
   serializeDesignSettings,
 } from './design-settings.js';
 import {
-  getCommunityActionCopy,
-  getToolDrawerCopy,
-  getWorkspacePresentation,
+  formatStatus,
+  getCircuitMarkers,
+  getFitZoom,
+  getInputCombinations,
+  getLampLabel,
+  getLampState,
+  getModeForPath,
+  getPathForMode,
+  getPublishLabel,
+  getSaveStateText,
 } from './workspace.js';
-import {
-  getTutorialCatalog,
-  getTutorialGroups,
-  getPlaygroundIntroSteps,
-  getTutorialsByGroup,
-} from './tutorials.js';
-import { mountLandingIntro } from './landing.js';
-import { getPresetStampSummary, presetGroups, presets } from './presets.js';
+import { presetGroups, presets } from './presets.js';
 import { createPendingActionStore, validateAccountFields } from './account-flow.js';
 import { readRecovery, writeRecovery, deleteRecovery } from './local-database.js';
 
 const WORLD_WIDTH = 300;
 const WORLD_HEIGHT = 200;
 const LOCAL_RECOVERY_KEY = 'life-logic-dev-recovery-v1';
+const THEME_KEY = 'life-theme';
 const BASE_CELL_SIZE = 10;
 const MIN_ZOOM = 0.18;
 const MAX_ZOOM = 3.6;
 const MAX_MAIN_THREAD_CATCH_UP_STEPS = 4;
+const SPEED_STEPS = [1, 2, 5, 10, 20, 40];
+const MOBILE_QUERY = window.matchMedia('(max-width: 899px)');
 const DEFAULT_DESIGN_SETTINGS = createDesignSettings({
   gridPreset: 'medium',
   width: WORLD_WIDTH,
   height: WORLD_HEIGHT,
 });
-const tutorialGroups = getTutorialGroups();
-const tutorialCatalog = getTutorialCatalog();
-const playgroundIntroSteps = getPlaygroundIntroSteps();
 
-const canvas = document.querySelector('#world');
+const PATTERN_NOTES = {
+  'random-soup': 'Fill the board at random',
+  block: 'Four cells that never change',
+  beehive: 'A six-cell still life',
+  loaf: 'A seven-cell still life',
+  boat: 'A five-cell still life',
+  tub: 'A four-cell diamond that stays still',
+  blinker: 'A two-step rhythm',
+  toad: 'A period-2 oscillator',
+  beacon: 'Two blocks blinking at the corners',
+  glider: 'A five-cell traveler',
+  lwss: 'A ship that flies sideways',
+  pulsar: 'A three-step oscillator',
+  pentadecathlon: 'A period-15 oscillator',
+  'traffic-light': 'Becomes four blinkers',
+  'small-exploder': 'Blooms, then leaves debris',
+  'ten-cell-row': 'A row that breaks apart',
+  'glider-pair': 'Two gliders on their way',
+  'gosper-gun': 'A repeating glider source',
+  'r-pentomino': 'Five cells, a thousand generations of chaos',
+  diehard: 'Vanishes after 130 generations',
+  acorn: 'Seven cells that grow for ages',
+  'gun-battery': 'Three guns firing together',
+  'spaceship-squadron': 'A fleet of eight ships',
+  'pulsar-constellation': 'Eight pulsars breathing',
+  'methuselah-garden': 'Long-lived seeds, spaced out',
+  'glider-fleet': 'Nine gliders in formation',
+  'blinker-wave': 'A wall of phased blinkers',
+};
+
+const GATE_CARDS = {
+  and: { name: 'AND', note: 'Outputs a signal only if both inputs are present' },
+  or: { name: 'OR', note: 'Outputs a signal if either input is present' },
+  not: { name: 'NOT', note: 'Outputs a signal only when input A is absent' },
+  'half-adder': { name: 'Half-adder', note: 'Adds two bits. Outputs Sum and Carry.' },
+};
+
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
+
+const canvas = $('#world');
 const ctx = canvas.getContext('2d', { alpha: false });
 
 const elements = {
-  playToggle: document.querySelector('#play-toggle'),
-  playLabel: document.querySelector('#play-label'),
-  step: document.querySelector('#step'),
-  clear: document.querySelector('#clear'),
-  randomize: document.querySelector('#randomize'),
-  undo: document.querySelector('#undo'),
-  redo: document.querySelector('#redo'),
-  resetStart: document.querySelector('#reset-start'),
-  promoteState: document.querySelector('#promote-state'),
-  fitBoard: document.querySelector('#fit-board'),
-  toolDrawerToggle: document.querySelector('#tool-drawer-toggle'),
-  toolDrawerLabel: document.querySelector('[data-tool-drawer-label]'),
-  toolDrawerClose: document.querySelector('#tool-drawer-close'),
-  toolPanel: document.querySelector('#tool-panel'),
-  speed: document.querySelector('#speed'),
-  speedLabel: document.querySelector('#speed-label'),
-  zoom: document.querySelector('#zoom'),
-  zoomLabel: document.querySelector('#zoom-label'),
-  ageColors: document.querySelector('#age-colors'),
-  populationChart: document.querySelector('#population-chart'),
-  importRle: document.querySelector('#import-rle'),
-  exportRle: document.querySelector('#export-rle'),
-  rleField: document.querySelector('#rle-field'),
-  patternTabs: document.querySelector('#pattern-tabs'),
-  presets: document.querySelector('#presets'),
-  presetCount: document.querySelector('#preset-count'),
-  stampRotateLeft: document.querySelector('#stamp-rotate-left'),
-  stampRotateRight: document.querySelector('#stamp-rotate-right'),
-  stampFlip: document.querySelector('#stamp-flip'),
-  stampTransformLabel: document.querySelector('#stamp-transform-label'),
-  stampOff: document.querySelector('#stamp-off'),
-  stampSummary: document.querySelector('#stamp-summary'),
-  generation: document.querySelector('#generation'),
-  population: document.querySelector('#population'),
-  density: document.querySelector('#density'),
-  boardSize: document.querySelector('#board-size'),
-  activeNote: document.querySelector('#active-note'),
-  toolButtons: document.querySelectorAll('[data-tool]'),
-  stampLabel: document.querySelector('[data-stamp-label]'),
-  feedbackToast: document.querySelector('#feedback-toast'),
-  playgroundTutorial: document.querySelector('#playground-tutorial'),
-  playgroundTutorialKicker: document.querySelector('#playground-tutorial-kicker'),
-  playgroundTutorialTitle: document.querySelector('#playground-tutorial-title'),
-  playgroundTutorialBody: document.querySelector('#playground-tutorial-body'),
-  playgroundTutorialNext: document.querySelector('#playground-tutorial-next'),
-  playgroundTutorialSkip: document.querySelector('#playground-tutorial-skip'),
-  introLayer: document.querySelector('#intro-layer'),
-  introCanvas: document.querySelector('#intro-canvas'),
-  introCardTitle: document.querySelector('#intro-card-title'),
-  introHelp: document.querySelector('#intro-help'),
-  introProfileFields: document.querySelector('#intro-profile-fields'),
-  introName: document.querySelector('#intro-name'),
-  introEmail: document.querySelector('#intro-email'),
-  introPrompt: document.querySelector('#intro-prompt'),
-  introStart: document.querySelector('#intro-start'),
-  introSkip: document.querySelector('#intro-skip'),
-  playerName: document.querySelector('#player-name'),
-  playerMeta: document.querySelector('#player-meta'),
-  accountEntry: document.querySelector('#account-entry'),
-  accountDialog: document.querySelector('#account-dialog'),
-  accountContext: document.querySelector('#account-context'),
-  accountTabs: document.querySelector('#account-tabs'),
-  accountName: document.querySelector('#account-name'),
-  accountEmail: document.querySelector('#account-email'),
-  accountPassword: document.querySelector('#account-password'),
-  accountRecoveryKey: document.querySelector('#account-recovery-key'),
-  accountSubmit: document.querySelector('#account-submit'),
-  accountOutput: document.querySelector('#account-output'),
-  accountSecurity: document.querySelector('#account-security'),
-  accountCreateRecovery: document.querySelector('#account-create-recovery'),
-  accountRecoveryOutput: document.querySelector('#account-recovery-output'),
-  accountDeleteConfirmation: document.querySelector('#account-delete-confirmation'),
-  accountDelete: document.querySelector('#account-delete'),
-  modePlayground: document.querySelector('#mode-playground'),
-  modeDev: document.querySelector('#mode-dev'),
-  modeCommunity: document.querySelector('#mode-community'),
-  devPanel: document.querySelector('#dev-panel'),
-  devOutput: document.querySelector('#dev-output'),
-  devDirtyState: document.querySelector('#dev-dirty-state'),
-  devProfileName: document.querySelector('#dev-profile-name'),
-  devProfileMeta: document.querySelector('#dev-profile-meta'),
-  devCreateDesign: document.querySelector('#dev-create-design'),
-  devCreateProject: document.querySelector('#dev-create-project'),
-  devDesignTitle: document.querySelector('#dev-design-title'),
-  devDesignDescription: document.querySelector('#dev-design-description'),
-  devDesignTags: document.querySelector('#dev-design-tags'),
-  devDesignAttribution: document.querySelector('#dev-design-attribution'),
-  devDesignTutorial: document.querySelector('#dev-design-tutorial'),
-  devSessionState: document.querySelector('#dev-session-state'),
-  devVersionCount: document.querySelector('#dev-version-count'),
-  devVersionList: document.querySelector('#dev-version-list'),
-  devDesignCount: document.querySelector('#dev-design-count'),
-  devDraftCount: document.querySelector('#dev-draft-count'),
-  devPublishedCount: document.querySelector('#dev-published-count'),
-  devStarredCount: document.querySelector('#dev-starred-count'),
-  devProjectList: document.querySelector('#dev-project-list'),
-  devGridSummary: document.querySelector('#dev-grid-summary'),
-  devStyleSummary: document.querySelector('#dev-style-summary'),
-  gridPreset: document.querySelector('#grid-preset'),
-  gridWidth: document.querySelector('#grid-width'),
-  gridHeight: document.querySelector('#grid-height'),
-  applyGridSize: document.querySelector('#apply-grid-size'),
-  wrapToggle: document.querySelector('#wrap-toggle'),
-  renderStyle: document.querySelector('#render-style'),
-  trailIntensity: document.querySelector('#trail-intensity'),
-  backgroundColor: document.querySelector('#background-color'),
-  gridColor: document.querySelector('#grid-color'),
-  liveCellColor: document.querySelector('#live-cell-color'),
-  trailCellColor: document.querySelector('#trail-cell-color'),
-  accentColor: document.querySelector('#accent-color'),
-  selectionColor: document.querySelector('#selection-color'),
-  saveDesign: document.querySelector('#save-design'),
-  publishDesign: document.querySelector('#publish-design'),
-  devPreview: document.querySelector('#dev-preview'),
-  devPreviewMode: document.querySelector('#dev-preview-mode'),
-  devPreviewDescription: document.querySelector('#dev-preview-description'),
-  previewFitPattern: document.querySelector('#preview-fit-pattern'),
-  previewUseView: document.querySelector('#preview-use-view'),
-  unpublishDesign: document.querySelector('#unpublish-design'),
-  archiveDesign: document.querySelector('#archive-design'),
-  deleteDesign: document.querySelector('#delete-design'),
-  tutorialGroups: document.querySelector('#tutorial-groups'),
-  tutorialList: document.querySelector('#tutorial-list'),
-  tutorialCount: document.querySelector('#tutorial-count'),
-  tutorialOutput: document.querySelector('#tutorial-output'),
-  devComponentButtons: document.querySelectorAll('[data-dev-component]'),
-  devDemoButtons: document.querySelectorAll('[data-dev-demo]'),
-  devClaimButtons: document.querySelectorAll('[data-dev-claim]'),
-  circuitExperiments: document.querySelector('#circuit-experiments'),
-  communityPanel: document.querySelector('#community-panel'),
-  communityCount: document.querySelector('#community-count'),
-  profileName: document.querySelector('#profile-name'),
-  profileEmail: document.querySelector('#profile-email'),
-  saveProfile: document.querySelector('#save-profile'),
-  communityAuth: document.querySelector('#community-auth'),
-  communityCloudStatus: document.querySelector('#community-cloud-status'),
-  communityAuthName: document.querySelector('#community-auth-name'),
-  communityAuthEmail: document.querySelector('#community-auth-email'),
-  communityAuthPassword: document.querySelector('#community-auth-password'),
-  communitySignUp: document.querySelector('#community-sign-up'),
-  communitySignIn: document.querySelector('#community-sign-in'),
-  communitySignOut: document.querySelector('#community-sign-out'),
-  communityAuthOutput: document.querySelector('#community-auth-output'),
-  creationTitle: document.querySelector('#creation-title'),
-  creationDescription: document.querySelector('#creation-description'),
-  creationTags: document.querySelector('#creation-tags'),
-  saveCreation: document.querySelector('#save-creation'),
-  publishCreation: document.querySelector('#publish-creation'),
-  copySharePayload: document.querySelector('#copy-share-payload'),
-  communityOutput: document.querySelector('#community-output'),
-  communityList: document.querySelector('#community-list'),
-  trendingList: document.querySelector('#trending-list'),
-  communityFamousList: document.querySelector('#community-famous-list'),
-  communityRemixList: document.querySelector('#community-remix-list'),
-  communitySearch: document.querySelector('#community-search'),
-  communityFilter: document.querySelector('#community-filter'),
-  communityFilterButton: document.querySelector('#community-filter-button'),
-  communityFilterLabel: document.querySelector('#community-filter-label'),
-  communityFilterMenu: document.querySelector('#community-filter-menu'),
-  communityFilterOptions: document.querySelectorAll('[data-community-filter-value]'),
-  communityDetail: document.querySelector('#community-detail'),
-  commentBody: document.querySelector('#comment-body'),
-  commentBox: document.querySelector('.comment-box'),
-  postComment: document.querySelector('#post-comment'),
-  speedStepButtons: document.querySelectorAll('[data-speed-step]'),
-  zoomStepButtons: document.querySelectorAll('[data-zoom-step]'),
+  body: document.body,
+  canvasHost: $('#canvas-host'),
+  modePlayground: $('#mode-playground'),
+  modeStudio: $('#mode-studio'),
+  modeCommunity: $('#mode-community'),
+  topMenuToggle: $('#top-menu-toggle'),
+  topMenu: $('#top-menu'),
+  themeToggle: $('#theme-toggle'),
+  accountEntry: $('#account-entry'),
+  accountEntryLabel: $('#account-entry-label'),
+  projectHeader: $('#project-header'),
+  projectsBack: $('#projects-back'),
+  projectTitle: $('#project-title'),
+  saveState: $('#save-state'),
+  inspectorToggle: $('#inspector-toggle'),
+  saveProject: $('#save-project'),
+  publishProject: $('#publish-project'),
+  publishProjectMobile: $('#publish-project-mobile'),
+  projectMenuToggle: $('#project-menu-toggle'),
+  projectMenu: $('#project-menu'),
+  unpublishProject: $('#unpublish-project'),
+  archiveProject: $('#archive-project'),
+  deleteProject: $('#delete-project'),
+  editor: $('#editor'),
+  rail: $('#rail'),
+  railTitle: $('#rail-title'),
+  railClose: $('#rail-close'),
+  railKindTabs: $('#rail-kind-tabs'),
+  patternPanel: $('#pattern-panel'),
+  patternSearch: $('#pattern-search'),
+  patternTabs: $('#pattern-tabs'),
+  patternList: $('#pattern-list'),
+  logicPanel: $('#logic-panel'),
+  logicList: $('#logic-list'),
+  sheetBackdrop: $('#sheet-backdrop'),
+  toolButtons: $$('[data-tool]'),
+  selectionGroup: $('#selection-group'),
+  stampGroup: $('#stamp-group'),
+  stampName: $('#stamp-name'),
+  stampRotateLeft: $('#stamp-rotate-left'),
+  stampRotateRight: $('#stamp-rotate-right'),
+  stampFlip: $('#stamp-flip'),
+  stampDone: $('#stamp-done'),
+  undo: $('#undo'),
+  redo: $('#redo'),
+  moreMenuToggle: $('#more-menu-toggle'),
+  moreMenu: $('#more-menu'),
+  clearBoard: $('#clear-board'),
+  importRle: $('#import-rle'),
+  exportRle: $('#export-rle'),
+  fitMobile: $('#fit-mobile'),
+  shortcuts: $('#shortcuts'),
+  howLifeWorksMobile: $('#how-life-works-mobile'),
+  playToggle: $('#play-toggle'),
+  playLabel: $('#play-label'),
+  step: $('#step'),
+  reset: $('#reset'),
+  speedToggle: $('#speed-toggle'),
+  speedLabel: $('#speed-label'),
+  speedMenu: $('#speed-menu'),
+  zoomOut: $('#zoom-out'),
+  zoomIn: $('#zoom-in'),
+  zoomLabel: $('#zoom-label'),
+  fit: $('#fit'),
+  patternsOpen: $('#patterns-open'),
+  statusMobile: $('#status-mobile'),
+  generation: $('#generation'),
+  population: $('#population'),
+  howLifeWorks: $('#how-life-works'),
+  rulesPopover: $('#rules-popover'),
+  inspector: $('#inspector'),
+  inspectorClose: $('#inspector-close'),
+  gridSize: $('#grid-size'),
+  edges: $('#edges'),
+  circuitSection: $('#circuit-section'),
+  circuitName: $('#circuit-name'),
+  inputsList: $('#inputs-list'),
+  outputsList: $('#outputs-list'),
+  runCircuit: $('#run-circuit'),
+  runProgress: $('#run-progress'),
+  runProgressBar: $('#run-progress-bar'),
+  runProgressText: $('#run-progress-text'),
+  fillTruthTable: $('#fill-truth-table'),
+  truthTable: $('#truth-table'),
+  projectDescription: $('#project-description'),
+  projectTags: $('#project-tags'),
+  versionHistory: $('#version-history'),
+  projectsPage: $('#projects-page'),
+  newProject: $('#new-project'),
+  projectsList: $('#projects-list'),
+  communityPanel: $('#community-panel'),
+  communityGallery: $('#community-gallery'),
+  communitySearch: $('#community-search'),
+  communityFilters: $('#community-filters'),
+  communityStatus: $('#community-status'),
+  communityGrid: $('#community-grid'),
+  communityDetail: $('#community-detail'),
+  accountDialog: $('#account-dialog'),
+  accountContext: $('#account-context'),
+  accountTabs: $('#account-tabs'),
+  accountName: $('#account-name'),
+  accountEmail: $('#account-email'),
+  accountPassword: $('#account-password'),
+  accountRecoveryKey: $('#account-recovery-key'),
+  accountSubmit: $('#account-submit'),
+  accountOutput: $('#account-output'),
+  accountSecurity: $('#account-security'),
+  accountCreateRecovery: $('#account-create-recovery'),
+  accountSignOut: $('#account-sign-out'),
+  accountRecoveryOutput: $('#account-recovery-output'),
+  accountDeleteConfirmation: $('#account-delete-confirmation'),
+  accountDelete: $('#account-delete'),
+  rleDialog: $('#rle-dialog'),
+  rleDialogTitle: $('#rle-dialog-title'),
+  rleNote: $('#rle-note'),
+  rleField: $('#rle-field'),
+  rleError: $('#rle-error'),
+  rleCopy: $('#rle-copy'),
+  rleStamp: $('#rle-stamp'),
+  shortcutsDialog: $('#shortcuts-dialog'),
+  toast: $('#toast'),
 };
 
 const localCommunity = createCommunityRepository({ backend: 'local' });
@@ -274,6 +262,8 @@ const communityAuth = {
 };
 let feedbackTimer = null;
 let recoveryTimer = null;
+let palette = {};
+const gateThumbnailCache = new Map();
 
 const state = {
   board: createBoard(DEFAULT_DESIGN_SETTINGS.width, DEFAULT_DESIGN_SETTINGS.height),
@@ -283,11 +273,11 @@ const state = {
   selection: null,
   circuit: null,
   circuitInputs: {},
+  circuitOutputs: null,
+  circuitRunning: false,
+  truthRows: null,
   simulation: null,
   simulationLoad: null,
-  trail: new Uint8Array(DEFAULT_DESIGN_SETTINGS.width * DEFAULT_DESIGN_SETTINGS.height),
-  age: new Uint16Array(DEFAULT_DESIGN_SETTINGS.width * DEFAULT_DESIGN_SETTINGS.height),
-  populationHistory: [],
   selectedPreset: null,
   stampRotation: 0,
   stampFlipX: false,
@@ -295,12 +285,9 @@ const state = {
   speed: 10,
   zoom: 1,
   mode: 'playground',
-  devProjectActive: false,
-  toolDrawerOpen: true,
-  playgroundIntroActive: false,
-  playgroundIntroIndex: 0,
-  playgroundIntroCompleted: false,
-  activeDesignSession: null,
+  studioView: 'project',
+  railTab: 'patterns',
+  session: null,
   designSettings: DEFAULT_DESIGN_SETTINGS,
   designDirty: false,
   saveStatus: 'saved',
@@ -308,13 +295,16 @@ const state = {
   previewConfig: {},
   recoveryFailed: false,
   simulationStepPending: false,
-  ageColors: true,
   panX: 0,
   panY: 0,
+  viewInitialized: false,
+  pendingFit: null,
+  pendingCenter: false,
   tool: 'draw',
   activePresetGroup: presetGroups[0].id,
-  activeTutorialGroup: tutorialGroups[0]?.id || 'starter',
+  patternQuery: '',
   selectedCommunityId: null,
+  communityView: 'gallery',
   communitySearch: '',
   communityFilter: 'all',
   communityComments: {},
@@ -322,6 +312,7 @@ const state = {
   publicProfile: null,
   patternFavorites: [],
   communityLoadStatus: 'idle',
+  trendingCreations: [],
   accountMode: 'sign-in',
   pointer: {
     active: false,
@@ -329,42 +320,19 @@ const state = {
     lastCell: null,
     lastX: 0,
     lastY: 0,
+    rect: null,
+    before: null,
+    pointers: new Map(),
+    pinch: null,
   },
   hoverCell: null,
   lastTick: 0,
   accumulator: 0,
 };
 
-const devComponents = {
-  glider: {
-    name: 'Glider signal',
-    note: 'Selected a glider signal. Stamp it on a clear lane, then check drift after four generations.',
-    coordinates: findPreset('glider').coordinates,
-  },
-  'gosper-gun': {
-    name: 'Gun source',
-    note: 'Selected the Gosper gun. Stamp it with open space to the right and watch the signal stream.',
-    coordinates: findPreset('gosper-gun').coordinates,
-  },
-  eater: {
-    name: 'Eater',
-    note: 'Selected a stable eater. Place it near a lane to experiment with signal absorption.',
-    coordinates: [
-      [0, 0],
-      [1, 0],
-      [0, 1],
-      [3, 1],
-      [1, 2],
-      [3, 2],
-      [2, 3],
-    ],
-  },
-  'collision-pair': {
-    name: 'Collision pair',
-    note: 'Selected two gliders as a collision seed. Use step mode to inspect the interaction.',
-    coordinates: findPreset('glider-pair').coordinates,
-  },
-};
+/* ---------------------------------------------------------------------------
+ * Runtime config and cloud community backend
+ * ------------------------------------------------------------------------- */
 
 function getCommunityRuntimeConfig() {
   const config = readInlineRuntimeConfig() || window.LIFE_LOGIC_COMMUNITY || {};
@@ -425,7 +393,7 @@ async function initializeCommunityBackend() {
   if (!communityAuth.cloudConfigured) return;
 
   communityAuth.initializing = true;
-  communityAuth.message = 'Connecting to cloud...';
+  communityAuth.message = 'Connecting…';
   renderCommunityAuth();
 
   try {
@@ -443,7 +411,7 @@ async function initializeCommunityBackend() {
         await handleCommunityAuthSession(session, { reason: 'initial session' });
         if (isCloudCommunityActive()) await resumePendingAccountAction();
       } else {
-        communityAuth.message = 'Sign in to publish, star, or clone.';
+        communityAuth.message = 'Sign in to publish, star, or comment.';
         renderCommunityAuth();
       }
       return;
@@ -460,7 +428,7 @@ async function initializeCommunityBackend() {
       await handleCommunityAuthSession(session, { reason: 'initial session' });
       if (isCloudCommunityActive()) await resumePendingAccountAction();
     } else {
-      communityAuth.message = 'Sign in to publish, star, or clone.';
+      communityAuth.message = 'Sign in to publish, star, or comment.';
       renderCommunityAuth();
     }
   } catch (error) {
@@ -590,7 +558,7 @@ async function handleCommunityAuthSession(session, { reason = '' } = {}) {
     community = localCommunity;
     communityState = localCommunity.getState();
     if (communityAuth.cloudConfigured && reason) {
-      communityAuth.message = 'Signed out. Local drafts active.';
+      communityAuth.message = 'Signed out. Projects stay on this device.';
     }
     renderCommunity();
     return;
@@ -615,8 +583,8 @@ async function activateCloudCommunity(session) {
 
   communityAuth.migrating = true;
   communityAuth.message = hasLocalCommunityData()
-    ? 'Migrating local builds...'
-    : 'Syncing cloud profile...';
+    ? 'Moving local projects to your account…'
+    : 'Syncing your account…';
   renderCommunityAuth();
 
   try {
@@ -624,7 +592,7 @@ async function activateCloudCommunity(session) {
     const migration = await migrateLocalState(localCommunity, repo, { deferCleanup: true });
     await repo.loadCommunityState();
     const mappings = localCommunity.getState().importMappings || {};
-    remapActiveDesignSession(
+    remapActiveSession(
       { ...Object.fromEntries(Object.entries(mappings).map(([id, mapping]) => [id, mapping.cloudProjectId])), ...migration?.creationMap },
       { ...Object.fromEntries(Object.entries(mappings).map(([id, mapping]) => [id, mapping.versionIds])), ...migration?.versionMaps },
     );
@@ -639,14 +607,14 @@ async function activateCloudCommunity(session) {
       try {
         await localCommunity.commitImportedSnapshot(result.snapshot.creation.id, result.snapshot, result.mapping);
       } catch {
-        communityAuth.message = 'Cloud ready. A local backup was retained because cleanup could not finish.';
+        communityAuth.message = 'Account ready. A local backup was kept because cleanup could not finish.';
       }
     }
   } catch (error) {
     community = localCommunity;
     communityState = localCommunity.getState();
-    communityAuth.message = `Migration paused: ${getErrorMessage(error)}`;
-    elements.communityOutput.textContent = 'Cloud sign-in worked. Local data stayed local.';
+    communityAuth.message = `Sync paused: ${getErrorMessage(error)}`;
+    showToast('Signed in. Projects stayed on this device.', { kind: 'info' });
     renderCommunity();
   } finally {
     communityAuth.migrating = false;
@@ -654,30 +622,23 @@ async function activateCloudCommunity(session) {
   }
 }
 
-function remapActiveDesignSession(creationMap, versionMaps = {}) {
-  const localId = state.activeDesignSession?.creationId;
+function remapActiveSession(creationMap, versionMaps = {}) {
+  const localId = state.session?.creationId;
   const cloudId = localId && creationMap?.[localId];
   if (!cloudId) return;
 
-  // Keep the in-memory board and dirty state untouched. Only the repository
-  // identifier changes, so a queued Publish resumes against the cloud build.
-  state.activeDesignSession = { ...state.activeDesignSession, creationId: cloudId };
-  if (state.activeDesignSession.currentVersionId && versionMaps?.[localId]?.[state.activeDesignSession.currentVersionId]) {
-    state.activeDesignSession.currentVersionId = versionMaps[localId][state.activeDesignSession.currentVersionId];
+  state.session = { ...state.session, creationId: cloudId };
+  if (state.session.currentVersionId && versionMaps?.[localId]?.[state.session.currentVersionId]) {
+    state.session.currentVersionId = versionMaps[localId][state.session.currentVersionId];
   }
   if (state.designDirty) scheduleLocalRecovery();
 }
 
 async function saveCloudProfileFromLocal(repo, user) {
-  const localState = localCommunity.getState();
-  const localProfile = localState.profile;
-  const email = localProfile?.email
-    || elements.profileEmail.value.trim()
-    || elements.communityAuthEmail.value.trim()
-    || user?.email
-    || '';
+  const localProfile = localCommunity.getState().profile;
+  const email = localProfile?.email || user?.email || '';
   const displayName = localProfile?.displayName
-    || elements.profileName.value.trim()
+    || user?.name
     || getDisplayNameFromEmail(email)
     || 'Life Builder';
 
@@ -688,10 +649,10 @@ function getMigrationMessage(migration) {
   const migratedCount = migration?.migratedCreations?.length || 0;
 
   if (migratedCount > 0) {
-    return `Migrated ${migratedCount} local ${migratedCount === 1 ? 'build' : 'builds'}.`;
+    return `Moved ${migratedCount} local ${migratedCount === 1 ? 'project' : 'projects'} to your account.`;
   }
 
-  return 'Cloud profile ready.';
+  return 'Account ready.';
 }
 
 function hasLocalCommunityData() {
@@ -716,28 +677,28 @@ function requiresCloudSignInForSharedAction() {
   return !isCloudCommunityActive();
 }
 
-function showSignInRequired(action) {
-  const message = `Sign in to ${action} shared builds.`;
-  communityAuth.message = message;
-  elements.communityOutput.textContent = message;
-  renderCommunityAuth();
-  openAccountDialog({ context: message });
-}
-
 function queueAccountAction(type, args = {}, context = '') {
   const pending = pendingActions.set({ type, args, returnRoute: window.location.pathname + window.location.search });
   openAccountDialog({ context: context || `Sign in to continue ${type.replaceAll('-', ' ')}.` });
   return pending;
 }
 
+function getErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error || 'Unknown error');
+}
+
+/* ---------------------------------------------------------------------------
+ * Account dialog
+ * ------------------------------------------------------------------------- */
+
 function openAccountDialog({ mode = 'sign-in', context = '' } = {}) {
   if (!elements.accountDialog.open) state.accountDialogTrigger = document.activeElement;
   state.accountMode = mode;
-  if (elements.accountContext) {
-    elements.accountContext.textContent = context || (isCloudSignedIn()
-      ? 'Your account is active in every workspace.'
-      : communityAuth.cloudConfigured ? 'Sign in without leaving your current workspace.' : 'Cloud accounts are unavailable in this local build. Your device drafts remain safe.');
-  }
+  elements.accountContext.textContent = context || (isCloudSignedIn()
+    ? 'Your account is active everywhere in Life Lab.'
+    : communityAuth.cloudConfigured
+      ? 'Sign in to publish, star, and comment.'
+      : 'Accounts are not available in this local build. Projects stay on this device.');
   renderAccountDialog();
   if (!elements.accountDialog.open) elements.accountDialog.showModal();
 }
@@ -762,12 +723,14 @@ function trapAccountDialogFocus(event) {
 function renderAccountDialog() {
   const signedIn = isCloudSignedIn();
   const mode = state.accountMode;
-  for (const tab of elements.accountTabs?.querySelectorAll('[data-account-mode]') || []) {
+  for (const tab of elements.accountTabs.querySelectorAll('[data-account-mode]')) {
     tab.setAttribute('aria-selected', String(tab.dataset.accountMode === mode));
     tab.disabled = signedIn;
   }
-  document.querySelector('[data-account-field="name"]')?.toggleAttribute('hidden', mode !== 'sign-up');
-  document.querySelector('[data-account-field="recovery"]')?.toggleAttribute('hidden', mode !== 'recover');
+  elements.accountTabs.hidden = signedIn;
+  document.querySelector('[data-account-field="name"]').hidden = signedIn || mode !== 'sign-up';
+  document.querySelector('[data-account-field="recovery"]').hidden = signedIn || mode !== 'recover';
+  elements.accountEmail.parentElement.hidden = signedIn;
   elements.accountSubmit.textContent = mode === 'sign-up' ? 'Create account' : mode === 'recover' ? 'Recover account' : 'Sign in';
   elements.accountSubmit.hidden = signedIn;
   elements.accountSubmit.disabled = !communityAuth.cloudConfigured || communityAuth.submitting;
@@ -866,69 +829,6 @@ async function deleteCurrentAccount() {
   } catch (error) { elements.accountOutput.textContent = getErrorMessage(error); elements.accountOutput.className = 'account-output error'; }
 }
 
-async function signUpCommunity() {
-  if (!communityAuth.cloudConfigured || !communityAuth.cloudRepo) {
-    communityAuth.message = 'Cloud is not ready.';
-    renderCommunityAuth();
-    return;
-  }
-
-  const name = elements.communityAuthName.value.trim() || elements.profileName.value.trim();
-  const email = (elements.communityAuthEmail.value || elements.profileEmail.value).trim();
-  const password = elements.communityAuthPassword.value;
-  if (!name || !email || password.length < 12) {
-    communityAuth.message = 'Enter a name, email, and password with at least 12 characters.';
-    renderCommunityAuth();
-    return;
-  }
-
-  communityAuth.submitting = true;
-  communityAuth.message = 'Creating your account...';
-  renderCommunityAuth();
-
-  try {
-    await communityAuth.cloudRepo.signUpWithEmail({ name, email, password });
-    elements.communityAuthPassword.value = '';
-    await refreshCommunitySession('account created');
-  } catch (error) {
-    communityAuth.message = `Could not create account: ${getErrorMessage(error)}`;
-  } finally {
-    communityAuth.submitting = false;
-    renderCommunityAuth();
-  }
-}
-
-async function signInCommunity() {
-  if (!communityAuth.cloudConfigured || !communityAuth.cloudRepo) {
-    communityAuth.message = 'Cloud is not ready.';
-    renderCommunityAuth();
-    return;
-  }
-
-  const email = (elements.communityAuthEmail.value || elements.profileEmail.value).trim();
-  const password = elements.communityAuthPassword.value;
-  if (!email || !password) {
-    communityAuth.message = 'Enter your email and password.';
-    renderCommunityAuth();
-    return;
-  }
-
-  communityAuth.submitting = true;
-  communityAuth.message = 'Signing in...';
-  renderCommunityAuth();
-
-  try {
-    await communityAuth.cloudRepo.signInWithEmail({ email, password });
-    elements.communityAuthPassword.value = '';
-    await refreshCommunitySession('signed in');
-  } catch (error) {
-    communityAuth.message = `Could not sign in: ${getErrorMessage(error)}`;
-  } finally {
-    communityAuth.submitting = false;
-    renderCommunityAuth();
-  }
-}
-
 async function refreshCommunitySession(reason) {
   const session = await readCommunityAuthSession(communityAuth.cloudRepo);
   if (!session) throw new Error('Account action did not create a session. Try signing in again.');
@@ -945,7 +845,7 @@ async function signOutCommunity() {
       const { error } = await communityAuth.supabaseClient.auth.signOut();
       if (error) throw new Error(error.message || 'Could not sign out.');
     }
-    communityAuth.message = 'Signed out. Local drafts active.';
+    communityAuth.message = 'Signed out. Projects stay on this device.';
   } catch (error) {
     communityAuth.message = `Could not sign out: ${getErrorMessage(error)}`;
   } finally {
@@ -959,67 +859,27 @@ async function signOutCommunity() {
 }
 
 function renderCommunityAuth() {
-  if (!elements.communityAuth) return;
-
-  const visible = communityAuth.cloudConfigured || communityAuth.cloudRequested;
-  // T5 has one contextual account surface. Keep the legacy embedded fields as
-  // compatibility inputs for older auth helpers, but never render two flows.
-  elements.communityAuth.hidden = true;
-  if (!visible) {
-    if (elements.accountEntry) elements.accountEntry.textContent = 'Account';
-    renderAccountDialog();
-    return;
-  }
-
   const signedIn = isCloudSignedIn();
-  const userEmail = communityAuth.user?.email || communityAuth.session?.user?.email || '';
-
-  elements.communityCloudStatus.textContent = getCloudStatusText({ signedIn, userEmail });
-  elements.communitySignOut.hidden = !signedIn;
-  elements.communitySignOut.disabled = communityAuth.migrating;
-  const disabled = !communityAuth.cloudRepo || communityAuth.submitting || communityAuth.migrating || signedIn;
-  elements.communitySignUp.disabled = disabled;
-  elements.communitySignIn.disabled = disabled;
-  elements.communityAuthName.disabled = disabled;
-  elements.communityAuthEmail.disabled = disabled;
-  elements.communityAuthPassword.disabled = disabled;
-  elements.communityAuthOutput.textContent = communityAuth.message || (signedIn ? 'Cloud active.' : 'Local drafts active.');
-
-  if (!elements.communityAuthEmail.value && document.activeElement !== elements.communityAuthEmail) {
-    elements.communityAuthEmail.value = elements.profileEmail.value || userEmail;
-  }
-  if (elements.accountEntry) elements.accountEntry.textContent = signedIn ? 'Account ✓' : 'Sign in';
+  const user = communityAuth.user || communityAuth.session?.user;
+  elements.accountEntryLabel.textContent = signedIn
+    ? (user?.name || getDisplayNameFromEmail(user?.email) || 'Account')
+    : 'Sign in';
   renderAccountDialog();
 }
 
-function getCloudStatusText({ signedIn, userEmail }) {
-  if (communityAuth.cloudRequested && !communityAuth.cloudConfigured) return 'Cloud: missing config';
-  if (communityAuth.initializing) return 'Cloud: connecting';
-  if (communityAuth.migrating) return 'Cloud: migrating';
-  if (signedIn) return `Cloud: ${userEmail || 'signed in'}`;
-  return 'Cloud: signed out';
-}
+/* ---------------------------------------------------------------------------
+ * Board core: snapshots, history, simulation loading
+ * ------------------------------------------------------------------------- */
 
-function getErrorMessage(error) {
-  return error instanceof Error ? error.message : String(error || 'Unknown error');
-}
-
-function resetBoardStorage(board = state.board) {
-  state.trail = new Uint8Array(board.width * board.height);
-  state.age = new Uint16Array(board.width * board.height);
-  state.populationHistory = [];
-}
-
-function replaceBoard(board, { center = false, markEffects = true } = {}) {
+function replaceBoard(board, { center = false } = {}) {
   state.playing = false;
   state.board = board;
   state.selection = null;
   loadSimulation(board);
-  resetBoardStorage(board);
-  if (markEffects) markLivingCells(230, 1);
   if (center) centerWorld();
   updateStats();
   updatePlayButton();
+  renderToolStrip();
 }
 
 function ownedSnapshot(board = state.board) {
@@ -1034,7 +894,7 @@ function loadSimulation(board = state.board, { wrapping = state.designSettings.w
     if (error?.name !== 'AbortError') throw error;
   });
   state.simulationLoad = load;
-  load.catch((error) => { elements.activeNote.textContent = `Simulation stopped: ${getErrorMessage(error)}`; });
+  load.catch((error) => { showToast(`Simulation stopped: ${getErrorMessage(error)}`, { kind: 'error' }); });
   return load;
 }
 
@@ -1048,39 +908,53 @@ function beginAuthoringCommand() {
   state.history.record(ownedSnapshot());
 }
 
-function finishAuthoringCommand(note = '', { keepSelection = false } = {}) {
+function finishAuthoringCommand({ keepSelection = false } = {}) {
   state.board.generation = 0;
   state.authoredStart = ownedSnapshot();
   if (!keepSelection) state.selection = null;
   loadSimulation();
   markDesignDirty(true);
   updateHistoryControls();
-  if (note) elements.activeNote.textContent = note;
   updateStats();
+  renderToolStrip();
 }
 
 function selectionCommand(command) {
-  if (command === 'copy' && state.selection) {
+  if (command === 'copy') {
+    if (!state.selection) return;
     state.clipboard = copySelection(state.board, state.selection);
-    elements.activeNote.textContent = 'Selection copied. Select a destination, then paste.';
+    showToast('Selection copied', { kind: 'success' });
     return;
   }
-  if (command === 'clear') { state.selection = null; return; }
+  if (command === 'deselect') {
+    state.selection = null;
+    renderToolStrip();
+    return;
+  }
   if (command !== 'paste' && !state.selection) return;
-  if (command === 'paste' && !state.clipboard) return;
+  if (command === 'paste' && !state.clipboard) {
+    showToast('Nothing to paste yet', { kind: 'info' });
+    return;
+  }
   let result;
   const rect = state.selection;
   if (command === 'paste') {
-    const origin = rect || screenToCell(window.innerWidth / 2, window.innerHeight / 2);
+    const origin = rect || screenToCell(canvas.clientWidth / 2, canvas.clientHeight / 2);
     const x = Math.max(0, Math.min(state.board.width - state.clipboard.width, origin.x));
     const y = Math.max(0, Math.min(state.board.height - state.clipboard.height, origin.y));
     result = pasteSelection(state.board, state.clipboard, x, y);
-  } else if (command === 'rotate' || command === 'reflect') {
+  } else if (command === 'rotate' || command === 'flip') {
     if (command === 'rotate' && (rect.x + rect.height > state.board.width || rect.y + rect.width > state.board.height)) {
-      elements.activeNote.textContent = 'Move the selection away from the edge before rotating.';
+      showToast('Move the selection away from the edge before rotating', { kind: 'error' });
       return;
     }
     result = transformSelection(state.board, rect, command === 'rotate' ? { rotation: 90 } : { flipX: true });
+  } else if (command === 'delete') {
+    const cleared = cloneBoard(state.board);
+    for (let row = rect.y; row < rect.y + rect.height; row += 1) {
+      cleared.cells.fill(0, row * cleared.width + rect.x, row * cleared.width + rect.x + rect.width);
+    }
+    result = { board: cleared, rect };
   } else {
     const delta = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] }[command];
     if (!delta) return;
@@ -1096,24 +970,25 @@ function selectionCommand(command) {
   beginAuthoringCommand();
   state.board = result.board;
   state.selection = result.rect;
-  resetBoardStorage();
-  markLivingCells();
-  finishAuthoringCommand(`Selection: ${command}.`, { keepSelection: true });
+  finishAuthoringCommand({ keepSelection: true });
 }
 
-function updateSelection(clientX, clientY) {
+function updateSelection(localX, localY) {
   const start = state.pointer.selectionStart;
-  const end = screenToCell(clientX, clientY);
+  const end = screenToCell(localX, localY);
   const x = Math.max(0, Math.min(state.board.width - 1, Math.min(start.x, end.x)));
   const y = Math.max(0, Math.min(state.board.height - 1, Math.min(start.y, end.y)));
-  state.selection = { x, y,
+  state.selection = {
+    x,
+    y,
     width: Math.max(1, Math.min(state.board.width - 1, Math.max(start.x, end.x)) - x + 1),
-    height: Math.max(1, Math.min(state.board.height - 1, Math.max(start.y, end.y)) - y + 1) };
+    height: Math.max(1, Math.min(state.board.height - 1, Math.max(start.y, end.y)) - y + 1),
+  };
 }
 
 function updateHistoryControls() {
-  if (elements.undo) elements.undo.disabled = !state.history.canUndo || state.playing;
-  if (elements.redo) elements.redo.disabled = !state.history.canRedo || state.playing;
+  elements.undo.disabled = !state.history.canUndo || state.playing;
+  elements.redo.disabled = !state.history.canRedo || state.playing;
 }
 
 function undoBoard() {
@@ -1142,60 +1017,41 @@ function resetToStart() {
   replaceBoard(ownedSnapshot(state.authoredStart));
   loadSimulation();
   updatePlayButton();
-  elements.activeNote.textContent = 'Reset to the authored starting state.';
+  if (state.circuit) {
+    state.circuitOutputs = null;
+    renderInspector();
+  }
 }
 
-function promoteCurrentStateToStart() {
-  state.playing = false;
-  state.simulation?.cancel();
-  state.board.generation = 0;
-  state.authoredStart = ownedSnapshot();
-  state.history.clear();
-  loadSimulation();
-  markDesignDirty(true);
-  updateHistoryControls();
-  updatePlayButton();
-  elements.activeNote.textContent = 'The current frame is now the authored starting state.';
-  showToast('Current state promoted to start', { kind: 'success' });
-}
+/* ---------------------------------------------------------------------------
+ * Save state, recovery, design settings
+ * ------------------------------------------------------------------------- */
 
 function markDesignDirty(dirty = true) {
   state.designDirty = dirty;
   setSaveStatus(dirty ? (navigator.onLine === false ? 'offline' : 'dirty') : 'saved');
   if (dirty) scheduleLocalRecovery();
+  renderPublishButton();
 }
 
 function setSaveStatus(status) {
-  const labels = {
-    dirty: 'Unsaved',
-    saving: 'Saving…',
-    saved: 'Saved',
-    failed: 'Save failed',
-    offline: 'Offline recovery',
-  };
   state.saveStatus = status;
-  if (elements.devDirtyState) {
-    elements.devDirtyState.textContent = labels[status] || labels.saved;
-    elements.devDirtyState.classList.toggle('dirty', status === 'dirty' || status === 'offline');
-    elements.devDirtyState.classList.toggle('failed', status === 'failed');
-  }
+  elements.saveState.textContent = getSaveStateText(status, { cloud: isCloudCommunityActive() });
+  elements.saveState.dataset.status = status;
 }
 
 function setPublishStatus(status) {
-  const labels = {
-    draft: 'Publish',
-    validating: 'Validating…',
-    publishing: 'Publishing…',
-    published: 'Published',
-    failed: 'Retry Publish',
-    unpublished: 'Republish',
-  };
   state.publishStatus = status;
-  for (const button of [elements.publishDesign, elements.publishCreation]) {
-    if (!button) continue;
-    button.textContent = labels[status] || labels.draft;
-    button.disabled = status === 'validating' || status === 'publishing';
-    button.setAttribute('aria-busy', status === 'validating' || status === 'publishing' ? 'true' : 'false');
+  renderPublishButton();
+}
+
+function renderPublishButton() {
+  const status = state.publishStatus;
+  const busy = status === 'validating' || status === 'publishing';
+  for (const button of [elements.publishProject, elements.publishProjectMobile]) {
+    button.textContent = getPublishLabel(status, { dirty: state.designDirty });
+    button.disabled = busy || (status === 'published' && !state.designDirty);
+    button.setAttribute('aria-busy', String(busy));
   }
 }
 
@@ -1204,14 +1060,13 @@ function scheduleLocalRecovery() {
   recoveryTimer = window.setTimeout(async () => {
     try {
       const authored = ownedSnapshot(state.authoredStart || state.board);
+      if (!state.session && authored.population === 0) return;
       const recovery = {
         format: 'life-board-binary-v1',
-        creationId: state.activeDesignSession?.creationId || null,
-        title: state.activeDesignSession?.title || elements.devDesignTitle?.value || 'Untitled Design',
-        description: elements.devDesignDescription?.value || '',
-        tags: elements.devDesignTags?.value || '',
-        attribution: elements.devDesignAttribution?.value || '',
-        tutorialReference: elements.devDesignTutorial?.value || '',
+        creationId: state.session?.creationId || null,
+        title: state.session?.title || elements.projectTitle.value || 'Untitled project',
+        description: elements.projectDescription.value || '',
+        tags: elements.projectTags.value || '',
         cells: new Uint8Array(authored.cells),
         width: authored.width,
         height: authored.height,
@@ -1247,6 +1102,7 @@ async function restoreLocalRecovery() {
     const raw = localStorage.getItem(LOCAL_RECOVERY_KEY);
     const recovery = await readRecovery(LOCAL_RECOVERY_KEY) || (raw && JSON.parse(raw));
     if (!recovery) return false;
+    if (!recovery.creationId && !(Number(recovery.population) > 0)) return false;
     const settings = createDesignSettings(recovery.settings || {
       gridPreset: 'custom',
       width: recovery.width,
@@ -1258,22 +1114,16 @@ async function restoreLocalRecovery() {
     state.designSettings = settings;
     replaceBoard(board, { center: true });
     state.authoredStart = ownedSnapshot(board);
-    state.devProjectActive = true;
-    state.activeDesignSession = {
-      kind: 'editing',
+    state.session = {
       creationId: recovery.creationId || null,
-      title: recovery.title || 'Recovered Design',
+      title: recovery.title || 'Recovered project',
       sourceTitle: '',
-      sourceOwnerName: communityState.profile?.displayName || 'Guest Builder',
+      sourceOwnerName: '',
     };
-    setDesignMetadataFields({
-      title: recovery.title,
-      description: recovery.description,
-      tags: recovery.tags,
-      attribution: recovery.attribution,
-      tutorialReference: recovery.tutorialReference,
-    });
+    setProjectFields({ title: recovery.title, description: recovery.description, tags: recovery.tags });
+    syncDesignControls();
     markDesignDirty(true);
+    showToast('Recovered unsaved work', { kind: 'info' });
     return true;
   } catch {
     return false;
@@ -1305,77 +1155,52 @@ function getCurrentDesignSettings() {
   });
 }
 
-function applyDesignSettingsPatch(patch, { resizeBoard = false, dirty = true, center = true } = {}) {
-  const previous = state.designSettings;
-  const next = mergeDesignSettings(previous, patch);
-  const dimensionsChanged = previous.width !== next.width || previous.height !== next.height;
-
-  state.designSettings = next;
-
-  if (resizeBoard || dimensionsChanged) {
-    replaceBoard(createBoard(next.width, next.height), { center });
-    state.authoredStart = ownedSnapshot();
-    state.history.clear();
-  } else if (previous.wrapping !== next.wrapping) {
-    loadSimulation();
+function resizeBoardKeepingCells(width, height) {
+  const next = createBoard(width, height);
+  const copyWidth = Math.min(width, state.board.width);
+  const copyHeight = Math.min(height, state.board.height);
+  for (let y = 0; y < copyHeight; y += 1) {
+    next.cells.set(state.board.cells.subarray(y * state.board.width, y * state.board.width + copyWidth), y * width);
   }
+  return next;
+}
 
-  setSpeed(next.speed);
-  setZoom(next.zoom);
+function applyGridSizeChoice(gridPreset) {
+  const next = mergeDesignSettings(state.designSettings, { gridPreset });
+  if (next.width === state.board.width && next.height === state.board.height) return;
+  beginAuthoringCommand();
+  state.designSettings = next;
+  state.board = resizeBoardKeepingCells(next.width, next.height);
+  exitCircuit();
+  finishAuthoringCommand();
+  fitBoard();
   syncDesignControls();
-  if (dirty) markDesignDirty(true);
+  showToast(`Grid is now ${next.width} × ${next.height}`, { kind: 'success' });
+}
+
+function applyEdgesChoice(value) {
+  const wrapping = value === 'wrapped';
+  if (wrapping === state.designSettings.wrapping) return;
+  state.designSettings = mergeDesignSettings(state.designSettings, { wrapping });
+  loadSimulation();
+  markDesignDirty(true);
+  syncDesignControls();
 }
 
 function syncDesignControls() {
   const settings = state.designSettings;
-
-  if (elements.gridPreset) elements.gridPreset.value = settings.gridPreset;
-  if (elements.gridWidth) elements.gridWidth.value = settings.width;
-  if (elements.gridHeight) elements.gridHeight.value = settings.height;
-  if (elements.wrapToggle) elements.wrapToggle.checked = settings.wrapping;
-  if (elements.renderStyle) elements.renderStyle.value = settings.renderStyle;
-  if (elements.trailIntensity) elements.trailIntensity.value = settings.trailIntensity;
-  if (elements.backgroundColor) elements.backgroundColor.value = settings.backgroundColor;
-  if (elements.gridColor) elements.gridColor.value = settings.gridColor;
-  if (elements.liveCellColor) elements.liveCellColor.value = settings.liveCellColor;
-  if (elements.trailCellColor) elements.trailCellColor.value = settings.trailCellColor;
-  if (elements.accentColor) elements.accentColor.value = settings.accentColor;
-  if (elements.selectionColor) elements.selectionColor.value = settings.selectionColor;
-  if (elements.devGridSummary) elements.devGridSummary.textContent = `${settings.width} x ${settings.height}`;
-  if (elements.devStyleSummary) elements.devStyleSummary.textContent = `${settings.renderStyle} cells`;
+  const custom = elements.gridSize.querySelector('option[value="custom"]');
+  const isPresetSize = ['small', 'medium', 'large'].includes(settings.gridPreset)
+    && createDesignSettings({ gridPreset: settings.gridPreset }).width === state.board.width;
+  custom.hidden = isPresetSize;
+  custom.textContent = `${state.board.width} × ${state.board.height}`;
+  elements.gridSize.value = isPresetSize ? settings.gridPreset : 'custom';
+  elements.edges.value = settings.wrapping ? 'wrapped' : 'bounded';
 }
 
-function syncToolDrawer() {
-  const shell = document.querySelector('.app-shell');
-  const presentation = getWorkspacePresentation(state.mode, { devProjectActive: state.devProjectActive });
-  const drawerControlsPanel = presentation.activePanel === 'playground'
-    || presentation.activePanel === 'dev-project';
-  const panelUnavailable = drawerControlsPanel && !state.toolDrawerOpen;
-  shell.classList.toggle('tools-collapsed', !state.toolDrawerOpen);
-  const copy = getToolDrawerCopy({ open: state.toolDrawerOpen });
-  if (elements.toolDrawerToggle) {
-    elements.toolDrawerToggle.setAttribute('aria-expanded', String(state.toolDrawerOpen));
-    elements.toolDrawerToggle.classList.toggle('active', state.toolDrawerOpen);
-    elements.toolDrawerToggle.setAttribute('aria-label', copy.ariaLabel);
-  }
-  if (elements.toolDrawerLabel) {
-    elements.toolDrawerLabel.textContent = copy.label;
-  }
-  if (elements.toolDrawerClose) {
-    elements.toolDrawerClose.textContent = copy.label;
-    elements.toolDrawerClose.setAttribute('aria-label', copy.ariaLabel);
-  }
-  if (elements.toolPanel) {
-    elements.toolPanel.inert = panelUnavailable;
-    elements.toolPanel.setAttribute('aria-hidden', String(panelUnavailable));
-  }
-  centerWorld();
-}
-
-function setToolDrawerOpen(open) {
-  state.toolDrawerOpen = open;
-  syncToolDrawer();
-}
+/* ---------------------------------------------------------------------------
+ * Stamp tool
+ * ------------------------------------------------------------------------- */
 
 function getTransformedPresetCoordinates() {
   if (!state.selectedPreset) return [];
@@ -1385,337 +1210,35 @@ function getTransformedPresetCoordinates() {
   });
 }
 
-function updateStampTransformControls() {
-  const degrees = ((state.stampRotation % 360) + 360) % 360;
-  if (elements.stampTransformLabel) {
-    elements.stampTransformLabel.textContent = state.stampFlipX ? `${degrees}° Flip` : `${degrees}°`;
-  }
-  if (elements.stampFlip) {
-    elements.stampFlip.classList.toggle('active', state.stampFlipX);
-    elements.stampFlip.setAttribute('aria-pressed', String(state.stampFlipX));
-  }
-}
-
-function getSelectedPresetStampSummary() {
-  return getPresetStampSummary(state.selectedPreset);
-}
-
-function updateStampSummary() {
-  if (!elements.stampSummary) return;
-
-  if (!state.selectedPreset) {
-    elements.stampSummary.hidden = true;
-    elements.stampSummary.textContent = '';
-    return;
-  }
-
-  elements.stampSummary.hidden = false;
-  elements.stampSummary.textContent = `${state.selectedPreset.name} · ${getSelectedPresetStampSummary()}`;
-}
-
-function turnStampOff() {
-  if (state.tool !== 'stamp') return;
-
-  state.hoverCell = null;
-  state.pointer.active = false;
-  setTool('draw');
-  elements.activeNote.textContent = state.selectedPreset
-    ? `Stamp off. ${state.selectedPreset.name} stays selected.`
-    : 'Stamp off.';
+function selectPreset(preset) {
+  state.selectedPreset = preset;
+  state.stampRotation = 0;
+  state.stampFlipX = false;
+  setTool('stamp');
+  updatePresetSelection();
   triggerHaptic('stampToggle');
 }
 
-function renderPlaygroundIntro() {
-  if (!elements.playgroundTutorial) return;
-
-  const step = playgroundIntroSteps[state.playgroundIntroIndex] || playgroundIntroSteps[0];
-  const isLast = state.playgroundIntroIndex >= playgroundIntroSteps.length - 1;
-  elements.playgroundTutorial.hidden = !state.playgroundIntroActive;
-  elements.playgroundTutorial.classList.toggle('active', state.playgroundIntroActive);
-  elements.playgroundTutorialKicker.textContent = `Rule ${state.playgroundIntroIndex + 1} / ${playgroundIntroSteps.length}`;
-  elements.playgroundTutorialTitle.textContent = step.title;
-  elements.playgroundTutorialBody.textContent = step.body;
-  elements.playgroundTutorialNext.textContent = isLast ? 'Play' : 'Next';
-}
-
-function openPlaygroundIntro() {
-  if (state.playgroundIntroCompleted || playgroundIntroSteps.length === 0) return;
-  state.playing = false;
-  updatePlayButton();
-  state.playgroundIntroActive = true;
-  state.playgroundIntroIndex = 0;
-  renderPlaygroundIntro();
-}
-
-function closePlaygroundIntro() {
-  state.playgroundIntroActive = false;
-  state.playgroundIntroCompleted = true;
-  renderPlaygroundIntro();
-  elements.activeNote.textContent = 'Playground ready. Draw cells, stamp patterns, or press Play.';
-}
-
-function advancePlaygroundIntro() {
-  if (!state.playgroundIntroActive) return;
-  if (state.playgroundIntroIndex >= playgroundIntroSteps.length - 1) {
-    closePlaygroundIntro();
-    return;
-  }
-
-  state.playgroundIntroIndex += 1;
-  renderPlaygroundIntro();
+function exitStamp() {
+  if (state.tool !== 'stamp') return;
+  state.hoverCell = null;
+  state.pointer.active = false;
+  setTool('draw');
+  triggerHaptic('stampToggle');
 }
 
 function rotateStamp(delta) {
   state.stampRotation = ((state.stampRotation + delta) % 360 + 360) % 360;
-  updateStampTransformControls();
-  elements.activeNote.textContent = `Stamp rotation ${state.stampRotation}°.`;
+  renderToolStrip();
 }
 
 function flipStamp() {
   state.stampFlipX = !state.stampFlipX;
-  updateStampTransformControls();
-  elements.activeNote.textContent = state.stampFlipX ? 'Stamp flip on.' : 'Stamp flip off.';
-}
-
-function getActiveDesignStatusText() {
-  const session = state.activeDesignSession;
-  if (!session) return '';
-
-  if (session.kind === 'playing') {
-    return `Playing ${session.sourceOwnerName}'s design: ${session.sourceTitle}.`;
-  }
-
-  if (session.sourceTitle) {
-    return `Editing ${session.title}, your version of ${session.sourceOwnerName}'s ${session.sourceTitle}.`;
-  }
-
-  return `Editing ${session.title}.`;
-}
-
-function setDesignTitle(title) {
-  const cleanTitle = String(title || '').trim();
-  const nextTitle = cleanTitle || 'Untitled design';
-  if (elements.devDesignTitle && document.activeElement !== elements.devDesignTitle) {
-    elements.devDesignTitle.value = nextTitle;
-  }
-  if (elements.creationTitle && document.activeElement !== elements.creationTitle) {
-    elements.creationTitle.value = nextTitle;
-  }
-  if (state.activeDesignSession) {
-    state.activeDesignSession.title = nextTitle;
-  }
-}
-
-function setDesignMetadataFields({
-  title,
-  description = '',
-  tags = [],
-  attribution = '',
-  tutorialReference = '',
-  visibility,
-  previewConfig,
-} = {}) {
-  setDesignTitle(title);
-  const tagText = Array.isArray(tags) ? tags.join(', ') : String(tags || '');
-  if (elements.devDesignDescription && document.activeElement !== elements.devDesignDescription) {
-    elements.devDesignDescription.value = description || '';
-  }
-  if (elements.devDesignTags && document.activeElement !== elements.devDesignTags) {
-    elements.devDesignTags.value = tagText;
-  }
-  if (visibility) setPublishStatus(visibility === 'public' ? 'published' : 'draft');
-  if (previewConfig) state.previewConfig = previewConfig;
-  if (elements.devDesignAttribution && document.activeElement !== elements.devDesignAttribution) {
-    elements.devDesignAttribution.value = attribution || '';
-  }
-  if (elements.devDesignTutorial && document.activeElement !== elements.devDesignTutorial) {
-    elements.devDesignTutorial.value = tutorialReference || '';
-  }
-  if (elements.creationDescription && document.activeElement !== elements.creationDescription) {
-    elements.creationDescription.value = description || '';
-  }
-  if (elements.creationTags && document.activeElement !== elements.creationTags) {
-    elements.creationTags.value = tagText;
-  }
-  renderDevPublishPreview();
-}
-
-function startDevProject(kind = 'design', {
-  title = '',
-  creationId = null,
-  source = null,
-  boardLoaded = false,
-  openTools = false,
-} = {}) {
-  const player = communityState.profile?.displayName || 'Guest Builder';
-  const sessionTitle = title || (kind === 'project' ? 'Untitled Project' : 'Untitled Design');
-  state.devProjectActive = true;
-  state.previewConfig = {};
-  state.toolDrawerOpen = openTools;
-  state.activeDesignSession = source
-    ? {
-      kind: 'editing',
-      creationId,
-      title: sessionTitle,
-      sourceTitle: source.title,
-      sourceOwnerName: source.ownerName,
-    }
-    : {
-      kind: 'editing',
-      creationId,
-      title: sessionTitle,
-      sourceTitle: '',
-      sourceOwnerName: player,
-    };
-
-  if (!boardLoaded) {
-    replaceBoard(createBoard(state.designSettings.width, state.designSettings.height), { center: true, markEffects: false });
-    markDesignDirty(false);
-  }
-
-  setDesignMetadataFields({ title: sessionTitle, description: '', tags: [] });
-  setMode('dev');
-  syncToolDrawer();
-  elements.activeNote.textContent = source
-    ? `Editing ${sessionTitle}, cloned from ${source.ownerName}'s ${source.title}.`
-    : `${sessionTitle} is a blank slate. Open Tools for stamps, tutorials, grid, and rotators.`;
-}
-
-function triggerHaptic(action) {
-  const pattern = getHapticPattern(action);
-  if (pattern.length > 0) navigator.vibrate?.(pattern);
-}
-
-function showToast(message, { kind = 'info' } = {}) {
-  if (!elements.feedbackToast) return;
-
-  window.clearTimeout(feedbackTimer);
-  elements.feedbackToast.textContent = message;
-  elements.feedbackToast.dataset.kind = kind;
-  elements.feedbackToast.classList.add('visible');
-  feedbackTimer = window.setTimeout(() => {
-    elements.feedbackToast.classList.remove('visible');
-  }, 1800);
-}
-
-function resizeCanvas() {
-  const pixelRatio = window.devicePixelRatio || 1;
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  canvas.width = Math.floor(width * pixelRatio);
-  canvas.height = Math.floor(height * pixelRatio);
-  canvas.style.width = `${width}px`;
-  canvas.style.height = `${height}px`;
-  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-}
-
-function centerWorld() {
-  const cellSize = getCellSize();
-  const viewport = getWorldViewport();
-  state.panX = viewport.left + (viewport.width - state.board.width * cellSize) / 2;
-  state.panY = viewport.top + (viewport.height - state.board.height * cellSize) / 2;
-}
-
-function getWorldViewport() {
-  const presentation = getWorkspacePresentation(state.mode, { devProjectActive: state.devProjectActive });
-  const compact = window.innerWidth <= 760;
-  const railWidth = compact ? 0 : 270;
-  const drawerVisible = state.toolDrawerOpen
-    && (presentation.activePanel === 'playground' || presentation.activePanel === 'dev-project');
-  const panelWidth = drawerVisible && window.innerWidth > 980 ? 380 : 0;
-  const margin = compact ? 12 : 18;
-  const left = railWidth + margin;
-  const right = panelWidth + margin;
-  const top = compact ? 138 : 84;
-  const bottom = compact ? 190 : margin;
-
-  return {
-    left,
-    top,
-    width: Math.max(160, window.innerWidth - left - right),
-    height: Math.max(160, window.innerHeight - top - bottom),
-  };
-}
-
-function getCellSize() {
-  return BASE_CELL_SIZE * state.zoom;
-}
-
-function screenToCell(clientX, clientY) {
-  const cellSize = getCellSize();
-  return {
-    x: Math.floor((clientX - state.panX) / cellSize),
-    y: Math.floor((clientY - state.panY) / cellSize),
-  };
-}
-
-function setZoom(nextZoom, anchorX = window.innerWidth / 2, anchorY = window.innerHeight / 2) {
-  const previousCellSize = getCellSize();
-  const worldX = (anchorX - state.panX) / previousCellSize;
-  const worldY = (anchorY - state.panY) / previousCellSize;
-
-  state.zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom));
-
-  const nextCellSize = getCellSize();
-  state.panX = anchorX - worldX * nextCellSize;
-  state.panY = anchorY - worldY * nextCellSize;
-  elements.zoom.value = Math.round(state.zoom * 100);
-  elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
-}
-
-function setSpeed(nextSpeed) {
-  state.speed = Math.min(40, Math.max(1, nextSpeed));
-  elements.speed.value = state.speed;
-  elements.speedLabel.textContent = `${state.speed} gen/s`;
-}
-
-function paintCell(cellX, cellY, alive) {
-  if (!state.designSettings.wrapping && (
-    cellX < 0 || cellY < 0 || cellX >= state.board.width || cellY >= state.board.height
-  )) {
-    return;
-  }
-
-  const x = wrap(cellX, state.board.width);
-  const y = wrap(cellY, state.board.height);
-  const index = cellIndex(state.board, x, y);
-  const nextValue = alive ? 1 : 0;
-
-  if (state.board.cells[index] === nextValue) return;
-
-  state.board.cells[index] = nextValue;
-  state.trail[index] = alive ? 255 : 120;
-  state.age[index] = alive ? Math.max(state.age[index], 1) : 0;
-  state.authoredStart = ownedSnapshot();
-  markDesignDirty(true);
-  updateStats();
-}
-
-function applyToolAt(clientX, clientY) {
-  const cell = screenToCell(clientX, clientY);
-  const key = `${wrap(cell.x, state.board.width)},${wrap(cell.y, state.board.height)}`;
-
-  if (state.pointer.lastCell === key) return;
-
-  if (state.pointer.mode === 'draw') paintCell(cell.x, cell.y, true);
-  if (state.pointer.mode === 'erase') paintCell(cell.x, cell.y, false);
-  if (state.pointer.mode === 'stamp') {
-    stampPattern(cell.x, cell.y);
-  }
-
-  state.pointer.lastCell = key;
-}
-
-function getCellAliveAt(clientX, clientY) {
-  const cell = screenToCell(clientX, clientY);
-  return getCell(state.board, cell.x, cell.y);
+  renderToolStrip();
 }
 
 function stampPattern(cellX, cellY) {
-  if (!state.selectedPreset) {
-    elements.activeNote.textContent = getToolStatusMessage({ tool: 'stamp' });
-    return;
-  }
+  if (!state.selectedPreset) return;
 
   const coordinates = getTransformedPresetCoordinates();
   const bounds = getPatternBounds(coordinates);
@@ -1724,16 +1247,8 @@ function stampPattern(cellX, cellY) {
 
   beginAuthoringCommand();
   state.board = placePatternForCurrentSettings(state.board, coordinates, originX, originY);
-  markLivingCells(255, 1);
-  elements.activeNote.textContent = getToolStatusMessage({
-    tool: 'stamp',
-    selectedPresetName: state.selectedPreset.name,
-    stampSummary: getSelectedPresetStampSummary(),
-  });
   triggerHaptic('stampPlace');
-  showToast(`Stamped ${state.selectedPreset.name}`, { kind: 'success' });
   finishAuthoringCommand();
-  updateStats();
 }
 
 function placePatternForCurrentSettings(board, coordinates, originX, originY) {
@@ -1756,878 +1271,98 @@ function placePatternForCurrentSettings(board, coordinates, originX, originY) {
   return next;
 }
 
-function selectPreset(preset) {
-  state.selectedPreset = preset;
-  setTool('stamp');
-  updatePresetSelection();
-  updateStampSummary();
-  elements.activeNote.textContent = getToolStatusMessage({
-    tool: 'stamp',
-    selectedPresetName: preset.name,
-    stampSummary: getSelectedPresetStampSummary(),
-  });
-  triggerHaptic('stampToggle');
+/* ---------------------------------------------------------------------------
+ * Projects (Studio sessions)
+ * ------------------------------------------------------------------------- */
+
+function setProjectFields({ title, description = '', tags = [] } = {}) {
+  const cleanTitle = String(title || '').trim() || 'Untitled project';
+  if (document.activeElement !== elements.projectTitle) elements.projectTitle.value = cleanTitle;
+  if (state.session) state.session.title = cleanTitle;
+  const tagText = Array.isArray(tags) ? tags.join(', ') : String(tags || '');
+  if (document.activeElement !== elements.projectDescription) elements.projectDescription.value = description || '';
+  if (document.activeElement !== elements.projectTags) elements.projectTags.value = tagText;
 }
 
-async function stepSimulation() {
-  if (state.simulationStepPending) return;
-  state.simulationStepPending = true;
-  const previousCells = state.board.cells;
-  try {
-    const load = state.simulationLoad;
-    await load;
-    if (load !== state.simulationLoad) return;
-    const next = await state.simulation.advance(1);
-
-    for (let i = 0; i < state.trail.length; i += 1) {
-      if (next.cells[i]) {
-        state.trail[i] = previousCells[i] ? Math.max(state.trail[i], 210) : 255;
-        state.age[i] = previousCells[i] ? Math.min(state.age[i] + 1, 1200) : 1;
-      } else if (previousCells[i]) {
-        state.trail[i] = Math.max(state.trail[i], 140);
-        state.age[i] = 0;
-      } else {
-        state.trail[i] = Math.floor(state.trail[i] * 0.84);
-        state.age[i] = 0;
-      }
-    }
-
-    state.board = ownedSnapshot(next);
-    updateStats();
-  } catch (error) {
-    if (error?.name !== 'AbortError') elements.activeNote.textContent = `Simulation stopped: ${getErrorMessage(error)}`;
-  } finally {
-    state.simulationStepPending = false;
-  }
-}
-
-function loadPreset(preset) {
-  beginAuthoringCommand();
-  const nextBoard = clearBoard(state.board);
-  const bounds = getPatternBounds(preset.coordinates);
-  const originX = Math.floor(state.board.width / 2 - bounds.width / 2);
-  const originY = Math.floor(state.board.height / 2 - bounds.height / 2);
-
-  state.board = placePattern(nextBoard, preset.coordinates, originX, originY);
-  state.selectedPreset = preset;
-  resetCellEffects();
-  markLivingCells(255, 1);
-
-  elements.activeNote.textContent = preset.note;
-  finishAuthoringCommand();
-  updatePresetSelection();
-  updateStampSummary();
-}
-
-function randomSoup() {
-  beginAuthoringCommand();
-  state.board = createRandomBoard(state.board.width, state.board.height, 0.18);
-  resetCellEffects();
-  markLivingCells(230, 1);
-
-  elements.activeNote.textContent = 'Random soup: turbulence first, then islands, oscillators, and debris.';
-  finishAuthoringCommand('Random soup: turbulence first, then islands, oscillators, and debris.');
-}
-
-function clearWorld() {
-  beginAuthoringCommand();
-  state.board = clearBoard(state.board);
-  resetCellEffects();
-  elements.activeNote.textContent = 'Blank board ready. Draw cells, drag in a pattern, then press Play.';
-  finishAuthoringCommand('Blank board ready. Draw cells, drag in a pattern, then press Play.');
-}
-
-function importRle() {
-  try {
-    const pattern = parseRle(elements.rleField.value);
-
-    state.selectedPreset = {
-      id: 'rle-clipboard',
-      name: 'RLE clipboard',
-      note: `RLE loaded (${pattern.width} x ${pattern.height}). Stamp stays active for repeated placement.`,
-      coordinates: pattern.coordinates,
-    };
-    setTool('stamp');
-    updatePresetSelection();
-    updateStampSummary();
-    elements.activeNote.textContent = getToolStatusMessage({
-      tool: 'stamp',
-      selectedPresetName: state.selectedPreset.name,
-      stampSummary: getSelectedPresetStampSummary(),
-    });
-    triggerHaptic('stampToggle');
-  } catch (error) {
-    elements.activeNote.textContent = error instanceof Error ? error.message : 'Could not import that RLE pattern.';
-  }
-}
-
-function exportRle() {
-  const coordinates = getLiveCoordinates();
-
-  elements.rleField.value = encodeRle(coordinates);
-  elements.activeNote.textContent = `Exported ${coordinates.length.toLocaleString()} live cells as RLE.`;
-  showToast('RLE exported', { kind: 'success' });
-}
-
-function getLiveCoordinates() {
-  const coordinates = [];
-
-  for (let y = 0; y < state.board.height; y += 1) {
-    for (let x = 0; x < state.board.width; x += 1) {
-      if (getCell(state.board, x, y)) coordinates.push([x, y]);
-    }
-  }
-
-  return coordinates;
-}
-
-function resetCellEffects() {
-  state.trail.fill(0);
-  state.age.fill(0);
-  state.populationHistory = [];
-}
-
-function markLivingCells(trail = 230, age = 1) {
-  for (let i = 0; i < state.board.cells.length; i += 1) {
-    if (state.board.cells[i]) {
-      state.trail[i] = Math.max(state.trail[i], trail);
-      state.age[i] = Math.max(state.age[i], age);
-    }
-  }
-}
-
-function render() {
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  const cellSize = getCellSize();
-  const worldWidth = state.board.width * cellSize;
-  const worldHeight = state.board.height * cellSize;
-
-  ctx.fillStyle = state.designSettings.backgroundColor;
-  ctx.fillRect(0, 0, width, height);
-
-  const gradient = ctx.createRadialGradient(width * 0.5, height * 0.45, 0, width * 0.5, height * 0.45, Math.max(width, height));
-  gradient.addColorStop(0, rgbaFromHex(state.designSettings.liveCellColor, 0.12));
-  gradient.addColorStop(0.48, rgbaFromHex(state.designSettings.backgroundColor, 0.88));
-  gradient.addColorStop(1, '#05070c');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.save();
-  ctx.translate(state.panX, state.panY);
-
-  ctx.fillStyle = state.designSettings.backgroundColor;
-  ctx.fillRect(0, 0, worldWidth, worldHeight);
-
-  drawGrid(cellSize, worldWidth, worldHeight);
-  drawCells(cellSize);
-  drawStampPreview(cellSize);
-  if (state.selection) {
-    const { x, y, width, height } = state.selection;
-    ctx.save();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = rgbaFromHex(state.designSettings.selectionColor, 0.16);
-    ctx.strokeStyle = state.designSettings.selectionColor;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    ctx.fillRect(x * cellSize, y * cellSize, width * cellSize, height * cellSize);
-    ctx.strokeRect(x * cellSize, y * cellSize, width * cellSize, height * cellSize);
-    ctx.restore();
-  }
-
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0.5, 0.5, worldWidth - 1, worldHeight - 1);
-
-  ctx.restore();
-
-  drawTorusHints(width, height);
-}
-
-function drawGrid(cellSize, worldWidth, worldHeight) {
-  if (cellSize < 5) return;
-
-  const alpha = Math.min(0.28, Math.max(0.08, (cellSize - 3) / 58));
-  ctx.strokeStyle = rgbaFromHex(state.designSettings.gridColor, alpha);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-
-  const startX = Math.max(0, Math.floor(-state.panX / cellSize) - 1);
-  const endX = Math.min(state.board.width, Math.ceil((window.innerWidth - state.panX) / cellSize) + 1);
-  const startY = Math.max(0, Math.floor(-state.panY / cellSize) - 1);
-  const endY = Math.min(state.board.height, Math.ceil((window.innerHeight - state.panY) / cellSize) + 1);
-
-  for (let x = startX; x <= endX; x += 1) {
-    const px = x * cellSize;
-    ctx.moveTo(px, 0);
-    ctx.lineTo(px, worldHeight);
-  }
-
-  for (let y = startY; y <= endY; y += 1) {
-    const py = y * cellSize;
-    ctx.moveTo(0, py);
-    ctx.lineTo(worldWidth, py);
-  }
-
-  ctx.stroke();
-
-  ctx.strokeStyle = rgbaFromHex(state.designSettings.accentColor, Math.min(0.24, alpha + 0.07));
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-
-  for (let x = Math.max(0, Math.ceil(startX / 10) * 10); x <= endX; x += 10) {
-    const px = x * cellSize;
-    ctx.moveTo(px, 0);
-    ctx.lineTo(px, worldHeight);
-  }
-
-  for (let y = Math.max(0, Math.ceil(startY / 10) * 10); y <= endY; y += 10) {
-    const py = y * cellSize;
-    ctx.moveTo(0, py);
-    ctx.lineTo(worldWidth, py);
-  }
-
-  ctx.stroke();
-}
-
-function drawCells(cellSize) {
-  const inset = cellSize > 8 ? 1 : 0;
-  const startX = Math.max(0, Math.floor(-state.panX / cellSize) - 1);
-  const endX = Math.min(state.board.width, Math.ceil((window.innerWidth - state.panX) / cellSize) + 1);
-  const startY = Math.max(0, Math.floor(-state.panY / cellSize) - 1);
-  const endY = Math.min(state.board.height, Math.ceil((window.innerHeight - state.panY) / cellSize) + 1);
-
-  for (let y = startY; y < endY; y += 1) {
-    for (let x = startX; x < endX; x += 1) {
-      const index = y * state.board.width + x;
-      const trail = state.trail[index];
-      const alive = state.board.cells[index] === 1;
-
-      if (!alive && (trail < 8 || state.designSettings.trailIntensity === 'off')) continue;
-
-      if (alive) {
-        const color = getAliveColor(state.age[index], trail);
-        ctx.shadowColor = color.shadow;
-        ctx.shadowBlur = state.designSettings.renderStyle === 'glow' && cellSize > 5
-          ? Math.min(22, cellSize * 1.2)
-          : Math.min(10, cellSize * 0.5);
-        ctx.fillStyle = color.fill;
-      } else {
-        ctx.shadowBlur = 0;
-        const trailFactor = getTrailFactor();
-        ctx.fillStyle = rgbaFromHex(state.designSettings.trailCellColor, Math.min(0.48, (trail / 760) * trailFactor));
-      }
-
-      drawCellShape(
-        x * cellSize + inset,
-        y * cellSize + inset,
-        Math.max(1, cellSize - inset * 2),
-        state.designSettings.renderStyle,
-      );
-    }
-  }
-
-  ctx.shadowBlur = 0;
-}
-
-function drawCellShape(x, y, size, style) {
-  if (style === 'dot') {
-    ctx.beginPath();
-    ctx.arc(x + size / 2, y + size / 2, Math.max(1, size * 0.34), 0, Math.PI * 2);
-    ctx.fill();
-    return;
-  }
-
-  if (style === 'rounded') {
-    drawRoundedRect(x, y, size, size, Math.min(4, size * 0.28));
-    ctx.fill();
-    return;
-  }
-
-  ctx.fillRect(x, y, size, size);
-}
-
-function drawRoundedRect(x, y, width, height, radius) {
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + width - radius, y);
-  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-  ctx.lineTo(x + width, y + height - radius);
-  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-  ctx.lineTo(x + radius, y + height);
-  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.closePath();
-}
-
-function getTrailFactor() {
-  const factors = {
-    low: 0.55,
-    medium: 1,
-    high: 1.65,
+function startProject({ title = 'Untitled project', creationId = null, source = null, boardLoaded = false } = {}) {
+  state.session = {
+    creationId,
+    title,
+    sourceTitle: source?.title || '',
+    sourceOwnerName: source?.ownerName || '',
   };
+  state.previewConfig = {};
+  exitCircuit();
 
-  return factors[state.designSettings.trailIntensity] || 0;
+  if (!boardLoaded) {
+    state.designSettings = DEFAULT_DESIGN_SETTINGS;
+    replaceBoard(createBoard(state.designSettings.width, state.designSettings.height), { center: true });
+    state.authoredStart = ownedSnapshot();
+    state.history.clear();
+    updateHistoryControls();
+    setZoom(1);
+    centerWorld();
+  }
+
+  setProjectFields({ title, description: '', tags: [] });
+  setPublishStatus('draft');
+  markDesignDirty(false);
+  state.studioView = 'project';
+  syncDesignControls();
+  renderStudio();
 }
 
-function rgbaFromHex(hex, alpha) {
-  const normalized = String(hex || '#000000').replace('#', '');
-  const value = /^[0-9a-f]{6}$/i.test(normalized) ? normalized : '000000';
-  const red = Number.parseInt(value.slice(0, 2), 16);
-  const green = Number.parseInt(value.slice(2, 4), 16);
-  const blue = Number.parseInt(value.slice(4, 6), 16);
-  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
-}
-
-function drawStampPreview(cellSize) {
-  if (state.tool !== 'stamp' || !state.selectedPreset || !state.hoverCell) return;
-
-  const coordinates = getTransformedPresetCoordinates();
-  const bounds = getPatternBounds(coordinates);
-  const originX = state.hoverCell.x - Math.floor(bounds.width / 2);
-  const originY = state.hoverCell.y - Math.floor(bounds.height / 2);
-  const inset = cellSize > 8 ? 1 : 0;
-
-  ctx.save();
-  ctx.shadowColor = 'rgba(94, 234, 212, 0.52)';
-  ctx.shadowBlur = Math.min(18, cellSize);
-  ctx.fillStyle = 'rgba(191, 253, 244, 0.28)';
-  ctx.strokeStyle = 'rgba(94, 234, 212, 0.72)';
-  ctx.lineWidth = Math.max(1, Math.min(2, cellSize * 0.12));
-
-  for (const [patternX, patternY] of coordinates) {
-    const x = wrap(originX + patternX, state.board.width);
-    const y = wrap(originY + patternY, state.board.height);
-    const px = x * cellSize + inset;
-    const py = y * cellSize + inset;
-    const size = Math.max(1, cellSize - inset * 2);
-
-    ctx.fillRect(px, py, size, size);
-    if (cellSize > 6) ctx.strokeRect(px + 0.5, py + 0.5, size - 1, size - 1);
-  }
-
-  ctx.restore();
-}
-
-function getAliveColor(age, trail) {
-  if (!state.ageColors) {
-    return {
-      fill: trail > 245 ? state.designSettings.selectionColor : state.designSettings.liveCellColor,
-      shadow: rgbaFromHex(state.designSettings.liveCellColor, 0.58),
-    };
-  }
-
-  if (age <= 2 || trail > 248) {
-    return {
-      fill: state.designSettings.selectionColor,
-      shadow: rgbaFromHex(state.designSettings.selectionColor, 0.72),
-    };
-  }
-
-  if (age < 12) {
-    return {
-      fill: state.designSettings.liveCellColor,
-      shadow: rgbaFromHex(state.designSettings.liveCellColor, 0.58),
-    };
-  }
-
-  if (age < 60) {
-    return {
-      fill: state.designSettings.trailCellColor,
-      shadow: rgbaFromHex(state.designSettings.trailCellColor, 0.46),
-    };
-  }
-
-  return {
-    fill: state.designSettings.accentColor,
-    shadow: rgbaFromHex(state.designSettings.accentColor, 0.42),
-  };
-}
-
-function drawTorusHints(width, height) {
-  ctx.save();
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.55)';
-  ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
-  ctx.fillText(
-    state.designSettings.wrapping
-      ? 'wrapped edges: north touches south, west touches east'
-      : 'bounded edges: cells outside the board stay dead',
-    24,
-    height - 24,
-  );
-  ctx.restore();
-}
-
-function drawPopulationChart() {
-  const chart = elements.populationChart;
-  const chartCtx = chart.getContext('2d');
-  const width = chart.width;
-  const height = chart.height;
-  const points = state.populationHistory;
-
-  chartCtx.clearRect(0, 0, width, height);
-  chartCtx.fillStyle = 'rgba(3, 7, 18, 0.82)';
-  chartCtx.fillRect(0, 0, width, height);
-
-  chartCtx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
-  chartCtx.lineWidth = 1;
-  chartCtx.beginPath();
-  for (let x = 0; x <= width; x += width / 4) {
-    chartCtx.moveTo(x, 0);
-    chartCtx.lineTo(x, height);
-  }
-  for (let y = 0; y <= height; y += height / 4) {
-    chartCtx.moveTo(0, y);
-    chartCtx.lineTo(width, y);
-  }
-  chartCtx.stroke();
-
-  if (points.length < 2) return;
-
-  const maxPopulation = Math.max(...points.map(({ population }) => population), 1);
-  chartCtx.strokeStyle = '#5eead4';
-  chartCtx.lineWidth = 2;
-  chartCtx.beginPath();
-
-  points.forEach(({ population }, index) => {
-    const x = (index / (points.length - 1)) * (width - 12) + 6;
-    const y = height - 8 - (population / maxPopulation) * (height - 16);
-
-    if (index === 0) chartCtx.moveTo(x, y);
-    else chartCtx.lineTo(x, y);
-  });
-
-  chartCtx.stroke();
-
-  chartCtx.fillStyle = 'rgba(94, 234, 212, 0.12)';
-  chartCtx.lineTo(width - 6, height - 8);
-  chartCtx.lineTo(6, height - 8);
-  chartCtx.closePath();
-  chartCtx.fill();
-}
-
-function updateStats() {
-  const population = getPopulation(state.board);
-  const density = population / state.board.cells.length;
-  const previous = state.populationHistory[state.populationHistory.length - 1];
-
-  if (previous?.generation === state.board.generation) {
-    previous.population = population;
-  } else {
-    state.populationHistory.push({ generation: state.board.generation, population });
-    if (state.populationHistory.length > 160) state.populationHistory.shift();
-  }
-
-  elements.generation.textContent = state.board.generation.toLocaleString();
-  elements.population.textContent = population.toLocaleString();
-  elements.density.textContent = `${(density * 100).toFixed(2)}%`;
-  elements.boardSize.textContent = `${state.board.width} x ${state.board.height}`;
-  drawPopulationChart();
-}
-
-function updatePlayButton() {
-  elements.playLabel.textContent = state.playing ? 'Pause' : 'Play';
-  elements.playToggle.querySelector('.button-icon').textContent = state.playing ? 'Ⅱ' : '▶';
-  elements.playToggle.setAttribute('aria-label', state.playing ? 'Pause simulation' : 'Play simulation');
-}
-
-function setTool(tool) {
-  state.tool = tool;
-  const shell = document.querySelector('.app-shell');
-  shell.classList.toggle('stamp-mode', tool === 'stamp');
-  shell.classList.toggle('pan-mode', tool === 'pan');
-
-  for (const button of elements.toolButtons) {
-    const active = button.dataset.tool === tool;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-checked', String(active));
-
-    if (button.dataset.tool === 'stamp') {
-      const label = button.querySelector('[data-stamp-label]');
-      const cta = getStampCta({ active });
-      if (label) label.textContent = active ? 'Stamp on' : cta.label;
-      button.setAttribute('aria-label', cta.ariaLabel);
-      button.title = active ? 'Stamp mode is on. Use Turn Stamp Off when you are done.' : cta.ariaLabel;
-      button.classList.toggle('danger-ready', cta.tone === 'danger');
-    }
-  }
-
-  if (elements.stampOff) {
-    const cta = getStampCta({ active: tool === 'stamp' });
-    elements.stampOff.hidden = tool !== 'stamp';
-    elements.stampOff.textContent = cta.label;
-    elements.stampOff.setAttribute('aria-label', cta.ariaLabel);
-  }
-  updateStampSummary();
-}
-
-function chooseTool(requestedTool) {
-  const wasHidingStamp = shouldHideStampPreview({
-    currentTool: state.tool,
-    requestedTool,
-  });
-  if (wasHidingStamp) {
-    turnStampOff();
-    return;
-  }
-
-  const nextTool = getNextTool({
-    currentTool: state.tool,
-    requestedTool,
-  });
-
-  setTool(nextTool);
-
-  if (nextTool === 'stamp') {
-    elements.activeNote.textContent = getToolStatusMessage({
-      tool: 'stamp',
-      selectedPresetName: state.selectedPreset?.name,
-      stampSummary: getSelectedPresetStampSummary(),
-    });
-    triggerHaptic('stampToggle');
-  } else if (nextTool === 'pan') {
-    elements.activeNote.textContent = getToolStatusMessage({ tool: 'pan' });
-  } else {
-    elements.activeNote.textContent = getToolStatusMessage({ tool: 'draw' });
-  }
-}
-
-function setMode(mode) {
-  const previousMode = state.mode;
-  const presentation = getWorkspacePresentation(mode, { devProjectActive: state.devProjectActive });
-  state.mode = presentation.mode;
-  const devMode = presentation.mode === 'dev';
-  const communityMode = presentation.mode === 'community';
-  const playgroundMode = presentation.mode === 'playground';
-  const devProjectMode = presentation.activePanel === 'dev-project';
-  const devStartMode = presentation.activePanel === 'dev-start';
-
-  if (!playgroundMode && state.playgroundIntroActive) {
-    state.playgroundIntroActive = false;
-    renderPlaygroundIntro();
-  }
-
-  if (previousMode !== presentation.mode) {
-    const nextTool = getToolAfterWorkspaceChange({ currentTool: state.tool });
-    if (nextTool !== state.tool) {
-      state.hoverCell = null;
-      state.pointer.active = false;
-      setTool(nextTool);
-    }
-  }
-
-  const shell = document.querySelector('.app-shell');
-  shell.classList.toggle('playground-mode', playgroundMode);
-  shell.classList.toggle('dev-mode', devMode);
-  shell.classList.toggle('dev-start-mode', devStartMode);
-  shell.classList.toggle('dev-active-mode', devProjectMode);
-  shell.classList.toggle('community-mode', communityMode);
-  shell.classList.toggle('world-hidden', !presentation.showsWorld);
-  shell.classList.toggle('profile-needed', devMode && !communityState.profile);
-  elements.modePlayground.classList.toggle('active', playgroundMode);
-  elements.modeDev.classList.toggle('active', devMode);
-  elements.modeCommunity.classList.toggle('active', communityMode);
-  elements.modePlayground.setAttribute('aria-current', playgroundMode ? 'page' : 'false');
-  elements.modeDev.setAttribute('aria-current', devMode ? 'page' : 'false');
-  elements.modeCommunity.setAttribute('aria-current', communityMode ? 'page' : 'false');
-
-  if (devMode) {
-    renderDevStudio();
-    elements.activeNote.textContent = devProjectMode
-      ? getActiveDesignStatusText()
-      : 'Dev Studio: create a new design or project to open a blank board.';
-    if (!communityState.profile && devStartMode) {
-      elements.devOutput.textContent = 'Drafts save on this device. Sign in when you want to publish or sync them.';
-    }
-  } else if (communityMode) {
-    if (state.playing) {
-      state.playing = false;
-      updatePlayButton();
-    }
-    renderCommunity();
-    elements.activeNote.textContent = 'Community Mode: save this board, publish it, clone builds, and watch what trends.';
-  } else {
-    elements.activeNote.textContent = getActiveDesignStatusText()
-      || 'Playground Mode: explore, draw, stamp presets, and watch the world evolve.';
-  }
-
-  syncToolDrawer();
-}
-
-function navigateTo(path, { replace = false, render = true } = {}) {
-  const method = replace ? 'replaceState' : 'pushState';
-  if (window.location.pathname + window.location.search !== path) window.history[method]({}, '', path);
-  if (render) routeCurrentLocation();
-}
-
-async function routeCurrentLocation() {
-  const path = window.location.pathname;
-  if (path === '/studio') {
-    const activeId = communityState.activeCreationId;
-    if (!state.activeDesignSession && activeId && community.findCreation(activeId)) openDevProject(activeId);
-    setMode('dev');
-    return;
-  }
-  if (path === '/community' || path === '/community/favorites') {
-    state.communityFilter = path.endsWith('/favorites') ? 'favorites' : 'all';
-    setMode('community');
-    return;
-  }
-  const creationMatch = path.match(/^\/c\/([^/]+)$/);
-  if (creationMatch) { await openPublicCreationRoute(decodeURIComponent(creationMatch[1])); return; }
-  const profileMatch = path.match(/^\/u\/([^/]+)$/);
-  if (profileMatch) { await openCreatorRoute(decodeURIComponent(profileMatch[1]), { updateHistory: false }); return; }
-  setMode('playground');
-}
-
-async function openPublicCreationRoute(identifier) {
-  setMode('community');
-  state.communityRenderEpoch = (state.communityRenderEpoch || 0) + 1;
-  elements.communityDetail.innerHTML = '<p class="community-state" role="status">Loading creation…</p>';
-  elements.commentBox.hidden = true;
+function openProject(creationId) {
+  const creation = community.findCreation(creationId);
+  if (!creation) return false;
   try {
-    let creation = findCommunityDesign(identifier);
-    if (!creation && communityAuth.cloudRepo?.getPublicCreation) creation = await communityAuth.cloudRepo.getPublicCreation(identifier);
-    if (!creation || creation.visibility !== 'public') throw Object.assign(new Error('This creation is unavailable or private.'), { status: 404 });
-    state.publicCreations = [creation, ...state.publicCreations.filter((item) => item.id !== creation.id)];
-    state.selectedCommunityId = creation.id;
-    if (communityAuth.cloudRepo?.listPublicComments && !creation.id.startsWith('famous-')) {
-      const result = await communityAuth.cloudRepo.listPublicComments(creation.slug || creation.id);
-      state.communityComments[creation.id] = result.comments || [];
-    }
-    renderCommunityDetail(creation);
-    document.title = `${creation.title} by ${creation.ownerName} · Life Lab`;
-  } catch (error) {
-    elements.communityDetail.innerHTML = `<div class="community-state"><h2>Creation unavailable</h2><p>${escapeHtml(getErrorMessage(error))}</p><button type="button" data-community-action="browse">Browse Community</button></div>`;
-  }
-}
-
-async function openCreatorRoute(username, { updateHistory = true } = {}) {
-  if (!username) return;
-  if (updateHistory) navigateTo(`/u/${encodeURIComponent(username)}`, { render: false });
-  setMode('community');
-  state.communityRenderEpoch = (state.communityRenderEpoch || 0) + 1;
-  elements.communityDetail.innerHTML = '<p class="community-state" role="status">Loading creator…</p>';
-  elements.commentBox.hidden = true;
-  try {
-    if (!communityAuth.cloudRepo?.getPublicProfile) throw Object.assign(new Error('Creator profiles require the configured Community service.'), { status: 503 });
-    const profile = await communityAuth.cloudRepo.getPublicProfile(username);
-    state.publicProfile = profile;
-    state.publicCreations = [...(profile.creations || []), ...state.publicCreations.filter((item) => !(profile.creations || []).some((creation) => creation.id === item.id))];
-    elements.communityDetail.innerHTML = `<div class="account-route-heading"><button type="button" data-community-action="browse">← Browse</button><span>Creator</span></div><h2>${escapeHtml(profile.displayName)}</h2><p>${escapeHtml(profile.bio || 'This builder has not added a bio yet.')}</p><p>${profile.creations?.length || 0} public creations</p>`;
-    renderCommunityList(elements.communityList, profile.creations || [], 'This creator has no public creations.', { source: 'new' });
-    document.title = `${profile.displayName} · Life Lab`;
-  } catch (error) {
-    elements.communityDetail.innerHTML = `<div class="community-state"><h2>Creator unavailable</h2><p>${escapeHtml(getErrorMessage(error))}</p><button type="button" data-community-action="browse">Browse Community</button></div>`;
-  }
-}
-
-function selectDevComponent(componentId) {
-  const component = devComponents[componentId];
-
-  if (!component) return;
-
-  state.selectedPreset = {
-    id: `dev-${componentId}`,
-    name: component.name,
-    note: component.note,
-    coordinates: component.coordinates,
-  };
-  setTool('stamp');
-  updatePresetSelection();
-  updateStampSummary();
-  elements.devOutput.textContent = `${component.name} ready. Stamp is on for repeated placement.`;
-  elements.activeNote.textContent = getToolStatusMessage({
-    tool: 'stamp',
-    selectedPresetName: component.name,
-    stampSummary: getSelectedPresetStampSummary(),
-  });
-  triggerHaptic('stampToggle');
-}
-
-function runDevDemo(demo) {
-  const demoMessages = {
-    and: 'Open the verified AND experiment below, set both finite inputs, and run until its probe settles.',
-    or: 'Open the verified OR experiment below, set either finite input, and run until its probe settles.',
-    adder: 'Open the verified binary half-adder experiment. It exposes independently measured Sum and Carry probes.',
-  };
-
-  if (demo === 'and' || demo === 'or') selectDevComponent('glider');
-  if (demo === 'adder') openCircuitExperiment('half-adder');
-
-  elements.devOutput.textContent = demoMessages[demo] || 'Choose a logic demo.';
-}
-
-function renderCircuitExperiments() {
-  if (!elements.circuitExperiments) return;
-  elements.circuitExperiments.innerHTML = circuitExperiments.map((experiment) => `
-    <article class="circuit-card" data-circuit-id="${experiment.id}">
-      <strong>${experiment.title}</strong>
-      <p>${experiment.description}</p>
-      <div class="circuit-ports">${experiment.inputs.map((input) => `<label>${input.toUpperCase()} <input type="checkbox" data-circuit-input="${input}" /></label>`).join('')}</div>
-      <button type="button" data-open-circuit="${experiment.id}">Try on board</button>
-      <button type="button" data-run-circuit="${experiment.id}">Run to output · ${experiment.observeGeneration}</button>
-      <output data-circuit-output="${experiment.id}">Choose inputs. Output settles at generation ${experiment.observeGeneration}.</output>
-    </article>`).join('');
-  elements.circuitExperiments.addEventListener('change', (event) => {
-    const card = event.target.closest('[data-circuit-id]');
-    if (!card || !event.target.matches('[data-circuit-input]')) return;
-    state.circuitInputs[card.dataset.circuitId] ||= {};
-    state.circuitInputs[card.dataset.circuitId][event.target.dataset.circuitInput] = event.target.checked;
-  });
-  elements.circuitExperiments.addEventListener('click', (event) => {
-    const open = event.target.closest('[data-open-circuit]');
-    const run = event.target.closest('[data-run-circuit]');
-    if (open) openCircuitExperiment(open.dataset.openCircuit);
-    if (run) runCircuitExperiment(run.dataset.runCircuit);
-  });
-}
-
-function circuitInput(id) {
-  return state.circuitInputs[id] || {};
-}
-
-function openCircuitExperiment(id) {
-  const experiment = buildCircuitExperiment(id, circuitInput(id));
-  state.circuit = experiment;
-  state.designSettings = mergeDesignSettings(state.designSettings, { width: experiment.board.width, height: experiment.board.height, wrapping: false });
-  replaceBoard(ownedSnapshot(experiment.board), { center: true });
-  state.authoredStart = ownedSnapshot(experiment.authoredBoard);
-  state.history.clear();
-  loadSimulation(state.board, { wrapping: false });
-  setMode('dev');
-  state.devProjectActive = true;
-  elements.devOutput.textContent = `${experiment.title} is editable. Ports are marked by the experiment panel; output is measured at generation ${experiment.observeGeneration}.`;
-  showToast(`${experiment.title} loaded`, { kind: 'success' });
-}
-
-async function runCircuitExperiment(id) {
-  state.playing = false;
-  updatePlayButton();
-  if (state.circuit?.id !== id) openCircuitExperiment(id);
-  const experiment = state.circuit;
-  const cardOutput = elements.circuitExperiments.querySelector(`[data-circuit-output="${id}"]`);
-  cardOutput.textContent = `Running finite signal train to generation ${experiment.observeGeneration}…`;
-  try {
-    const load = state.simulationLoad;
-    await load;
-    if (load !== state.simulationLoad) return;
-    if (state.board.generation > experiment.observeGeneration) {
-      cardOutput.textContent = 'This board has passed the observation generation. Reset before running to output.';
-      return;
-    }
-    const remaining = Math.max(0, experiment.observeGeneration - state.board.generation);
-    const snapshot = remaining ? await state.simulation.advance(remaining, {
-      onSnapshot: (board) => {
-        state.board = ownedSnapshot(board);
-        updateStats();
-      },
-    }) : ownedSnapshot();
-    state.board = ownedSnapshot(snapshot);
-    const outputs = readCircuitOutputs(experiment, state.board);
-    cardOutput.textContent = outputs.map((output) => `${output.label}: ${output.high ? 'HIGH' : 'LOW'} (${output.population} cells)`).join(' · ');
-    elements.devOutput.textContent = `Settled output: ${cardOutput.textContent}. Measured from real probe cells.`;
-  } catch (error) {
-    cardOutput.textContent = `Circuit run stopped: ${getErrorMessage(error)}`;
-  }
-}
-
-function runDevClaim(claim) {
-  if (claim === 'period') {
-    elements.devOutput.textContent = describePeriodClaim(state.board);
-  }
-
-  if (claim === 'drift') {
-    elements.devOutput.textContent = describeDriftClaim(state.board);
-  }
-
-  if (claim === 'population') {
-    elements.devOutput.textContent = describePopulationSnapshot(state.board);
-  }
-}
-
-async function saveLocalProfile() {
-  if (communityAuth.cloudConfigured && !isCloudSignedIn()) {
-    openAccountDialog({ mode: 'sign-up', context: 'Create an account to sync your designs. Device drafts stay available.' });
-    return;
-  }
-  const email = elements.profileEmail.value;
-  const displayName = elements.profileName.value;
-
-  if (!email.trim() || !displayName.trim()) {
-    elements.communityOutput.textContent = 'Add a display name and email before saving the profile.';
-    return;
-  }
-
-  try {
-    const profile = await community.saveProfile({ email, displayName });
-    syncCommunity();
-    renderPlayerCard();
-    elements.communityOutput.textContent = isCloudCommunityActive()
-      ? `Cloud profile saved for ${profile.displayName}.`
-      : `Signed in locally as ${profile.displayName}.`;
-  } catch (error) {
-    elements.communityOutput.textContent = `Could not save profile: ${getErrorMessage(error)}`;
-  }
-}
-
-async function saveIntroProfileFromFields({ requireProfile = false } = {}) {
-  const displayName = elements.introName?.value?.trim() || '';
-  const email = elements.introEmail?.value?.trim() || '';
-
-  if (communityState.profile) return true;
-
-  if (!displayName || !email) {
-    if (!requireProfile) return true;
-    const missingField = !displayName ? elements.introName : elements.introEmail;
-    missingField?.focus({ preventScroll: true });
-    if (elements.introHelp) elements.introHelp.textContent = 'Name and email unlock Dev Studio.';
+    loadCreationOntoBoard(creation);
+  } catch {
+    showToast(`Could not open ${creation.title}`, { kind: 'error' });
     return false;
   }
+  community.setActiveCreation(creation.id);
+  communityState = community.getState();
+  startProject({
+    title: creation.title,
+    creationId: creation.id,
+    source: creation.remixedFromId ? findCommunityDesign(creation.remixedFromId) : null,
+    boardLoaded: true,
+  });
+  setProjectFields(creation);
+  setPublishStatus(creation.visibility === 'public' ? 'published' : 'draft');
+  markDesignDirty(false);
+  return true;
+}
 
-  elements.profileName.value = displayName;
-  elements.profileEmail.value = email;
+function getActiveCreation() {
+  return state.session?.creationId ? community.findCreation(state.session.creationId) : null;
+}
 
-  try {
-    await community.saveProfile({ email, displayName });
-    syncCommunity();
-    renderPlayerCard();
-    showToast(`Welcome, ${displayName}`, { kind: 'success' });
-    return true;
-  } catch (error) {
-    elements.communityOutput.textContent = `Could not save intro profile: ${getErrorMessage(error)}`;
-    if (elements.introHelp) elements.introHelp.textContent = 'Account save failed. Try again.';
-    return false;
-  }
+function getOwnCreations() {
+  const profile = communityState.profile;
+  return communityState.creations
+    .filter((creation) => !creation.archivedAt && (!profile || creation.ownerId === profile.id))
+    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
 }
 
 async function saveCurrentCreation({ publish = false, resumed = false } = {}) {
   if (publish && ['validating', 'publishing'].includes(state.publishStatus)) return null;
+  if (!state.session) startProject({ title: elements.projectTitle.value || 'Untitled project', boardLoaded: true });
 
   if (!communityState.profile && isCloudCommunityActive()) {
-    elements.communityOutput.textContent = isCloudCommunityActive()
-      ? 'Cloud profile is still syncing. Try again in a moment.'
-      : 'Your local draft is ready to save.';
+    showToast('Your account is still syncing. Try again in a moment.', { kind: 'info' });
     return null;
   }
 
   const authored = ownedSnapshot(state.authoredStart || state.board);
-  const editingInDev = state.devProjectActive && state.activeDesignSession?.kind === 'editing';
-  const activeCreationId = editingInDev ? state.activeDesignSession?.creationId : null;
-  const title = editingInDev
-    ? elements.devDesignTitle.value
-    : elements.creationTitle.value;
-  const description = editingInDev
-    ? elements.devDesignDescription.value
-    : elements.creationDescription.value;
-  const tags = editingInDev ? elements.devDesignTags.value : elements.creationTags.value;
+  const activeCreationId = state.session?.creationId || null;
   const input = {
-    title: title || getSuggestedCreationTitle(),
-    description,
-    tags,
-    attribution: editingInDev ? elements.devDesignAttribution.value : '',
-    tutorialReference: editingInDev ? elements.devDesignTutorial.value : '',
+    title: elements.projectTitle.value.trim() || 'Untitled project',
+    description: elements.projectDescription.value,
+    tags: elements.projectTags.value,
+    attribution: state.session?.sourceTitle ? `Remixed from ${state.session.sourceTitle} by ${state.session.sourceOwnerName}.` : '',
+    tutorialReference: '',
     rle: boardToRle(authored),
     width: authored.width,
     height: authored.height,
@@ -2645,14 +1380,19 @@ async function saveCurrentCreation({ publish = false, resumed = false } = {}) {
     if (!readiness.ready) {
       const message = readiness.issues[0]?.message || 'Add publish details first.';
       setPublishStatus('failed');
-      elements.communityOutput.textContent = message;
-      elements.devOutput.textContent = message;
-      showToast(message, { kind: 'warning' });
+      showToast(message, { kind: 'error' });
+      if (MOBILE_QUERY.matches) openInspector(true);
+      const issueField = readiness.issues[0]?.field;
+      if (issueField === 'description') elements.projectDescription.focus();
+      else if (issueField === 'tags') elements.projectTags.focus();
+      else if (issueField === 'title') elements.projectTitle.focus();
       return null;
     }
-    if (requiresCloudSignInForSharedAction()) {
+    // A hosted build publishes to the shared Community and needs an account.
+    // A local-only build publishes on this device so the button is never a dead end.
+    if (communityAuth.cloudConfigured && requiresCloudSignInForSharedAction()) {
       setPublishStatus('draft');
-      if (!resumed) queueAccountAction('publish', {}, 'Sign in to publish this design. Your editor state will stay exactly where it is.');
+      if (!resumed) queueAccountAction('publish', {}, 'Sign in to publish this project. Your work stays exactly where it is.');
       return null;
     }
     setPublishStatus('publishing');
@@ -2670,9 +1410,9 @@ async function saveCurrentCreation({ publish = false, resumed = false } = {}) {
   } catch (error) {
     if (publish) setPublishStatus('failed');
     setSaveStatus(navigator.onLine === false ? 'offline' : 'failed');
-    elements.communityOutput.textContent = error.name === 'QuotaExceededError'
-      ? 'Could not save: browser storage is full. Remove some builds and try again.'
-      : `Could not save: ${getErrorMessage(error)}`;
+    showToast(error.name === 'QuotaExceededError'
+      ? 'Could not save: browser storage is full.'
+      : `Could not save: ${getErrorMessage(error)}`, { kind: 'error' });
     return null;
   }
 
@@ -2682,33 +1422,21 @@ async function saveCurrentCreation({ publish = false, resumed = false } = {}) {
     return null;
   }
 
-  if (editingInDev) {
-    state.activeDesignSession.creationId = creation.id;
-    state.activeDesignSession.title = creation.title;
-  }
-  setDesignMetadataFields(creation);
+  state.session.creationId = creation.id;
+  state.session.title = creation.title;
+  setProjectFields(creation);
   setPublishStatus(creation.visibility === 'public' ? 'published' : 'draft');
   syncCommunity();
   markDesignDirty(false);
   clearLocalRecovery();
   triggerHaptic('save');
-  showToast(publish ? 'Published to Community' : 'Draft saved', { kind: 'success' });
-  elements.communityOutput.textContent = publish
-    ? `Published ${creation.title}. It now appears in Trending.`
-    : `Saved ${creation.title} as version ${creation.currentVersion?.versionNumber || 1}.`;
-  elements.devOutput.textContent = publish
-    ? `Published ${creation.title} to Community.`
-    : `Saved version ${creation.currentVersion?.versionNumber || 1} of ${creation.title}.`;
-
+  showToast(publish ? (isCloudCommunityActive() ? 'Published to Community' : 'Published on this device') : 'Saved', { kind: 'success' });
+  renderStudio();
   return creation;
 }
 
-async function publishActiveCreation() {
-  await saveCurrentCreation({ publish: true });
-}
-
 async function unpublishActiveCreation() {
-  const creationId = state.activeDesignSession?.creationId;
+  const creationId = state.session?.creationId;
   if (!creationId) return;
   setSaveStatus('saving');
   try {
@@ -2717,134 +1445,67 @@ async function unpublishActiveCreation() {
     syncCommunity();
     setSaveStatus('saved');
     setPublishStatus('unpublished');
-    elements.devOutput.textContent = `${creation.title} is now private.`;
-    showToast('Design unpublished', { kind: 'success' });
+    showToast('Project is private again', { kind: 'success' });
+    renderStudio();
   } catch (error) {
     setSaveStatus('failed');
-    elements.devOutput.textContent = `Could not unpublish: ${getErrorMessage(error)}`;
+    showToast(`Could not unpublish: ${getErrorMessage(error)}`, { kind: 'error' });
   }
 }
 
 async function archiveActiveCreation() {
-  const creationId = state.activeDesignSession?.creationId;
-  if (!creationId || !window.confirm('Archive this design? It will become private and leave the active project list.')) return;
+  const creationId = state.session?.creationId;
+  if (!creationId || !window.confirm('Archive this project? It becomes private and leaves your project list.')) return;
   try {
     const creation = await community.archiveCreation(creationId);
     if (!creation) return;
-    state.devProjectActive = false;
-    state.activeDesignSession = null;
+    state.session = null;
     clearLocalRecovery();
     syncCommunity();
-    setMode('dev');
-    showToast('Design archived', { kind: 'success' });
+    showProjectsList();
+    showToast('Project archived', { kind: 'success' });
   } catch (error) {
     setSaveStatus('failed');
-    elements.devOutput.textContent = `Could not archive: ${getErrorMessage(error)}`;
+    showToast(`Could not archive: ${getErrorMessage(error)}`, { kind: 'error' });
   }
 }
 
 async function deleteActiveCreation() {
-  const creationId = state.activeDesignSession?.creationId;
-  if (!creationId || !window.confirm('Permanently delete this design and every version? This cannot be undone.')) return;
+  const creationId = state.session?.creationId;
+  if (!creationId || !window.confirm('Delete this project and every version? This cannot be undone.')) return;
   try {
     const deleted = await community.deleteCreation(creationId);
     if (!deleted) return;
-    state.devProjectActive = false;
-    state.activeDesignSession = null;
+    state.session = null;
     clearLocalRecovery();
     syncCommunity();
-    setMode('dev');
-    showToast('Design deleted', { kind: 'success' });
+    showProjectsList();
+    showToast('Project deleted', { kind: 'success' });
   } catch (error) {
     setSaveStatus('failed');
-    elements.devOutput.textContent = `Could not delete: ${getErrorMessage(error)}`;
+    showToast(`Could not delete: ${getErrorMessage(error)}`, { kind: 'error' });
   }
 }
 
 async function restoreActiveVersion(versionId) {
-  const creationId = state.activeDesignSession?.creationId;
+  const creationId = state.session?.creationId;
   if (!creationId) return;
   setSaveStatus('saving');
   try {
     const creation = await community.restoreVersion(creationId, versionId);
     if (!creation) return;
-    loadCreationOntoBoard(creation, { center: true });
+    loadCreationOntoBoard(creation);
     syncCommunity();
     setSaveStatus('saved');
-    elements.devOutput.textContent = `Restored version as new version ${creation.currentVersion.versionNumber}.`;
-    showToast('Version restored', { kind: 'success' });
+    showToast(`Restored as version ${creation.currentVersion.versionNumber}`, { kind: 'success' });
+    renderStudio();
   } catch (error) {
     setSaveStatus('failed');
-    elements.devOutput.textContent = `Could not restore version: ${getErrorMessage(error)}`;
+    showToast(`Could not restore version: ${getErrorMessage(error)}`, { kind: 'error' });
   }
 }
 
-async function copySharePayload() {
-  const active = getActiveCreation();
-
-  if (!active) return;
-
-  if (active.visibility !== 'public' || !active.slug) {
-    elements.communityOutput.textContent = 'Publish this design before copying its public link.';
-    showToast('Publish before sharing', { kind: 'warning' });
-    return;
-  }
-
-  const link = `${window.location.origin}/c/${encodeURIComponent(active.slug)}`;
-
-  try {
-    await navigator.clipboard.writeText(link);
-    elements.communityOutput.textContent = `Copied a share link for ${active.title}.`;
-    triggerHaptic('copy');
-    showToast('Share link copied', { kind: 'success' });
-  } catch {
-    elements.rleField.value = link;
-    elements.communityOutput.textContent = 'Clipboard was unavailable, so the share link was placed in the RLE box.';
-    showToast('Share link moved to RLE box', { kind: 'warning' });
-  }
-}
-
-function importSharedBuildFromHash() {
-  const shared = decodeShareLink(window.location.hash);
-  if (!shared) return;
-
-  try {
-    const pattern = parseRle(shared.rle);
-    state.board = clearBoard(state.board);
-    state.board = placePattern(state.board, pattern.coordinates, 0, 0);
-    resetCellEffects();
-    markLivingCells(230, 1);
-    updateStats();
-    elements.creationTitle.value = shared.title || '';
-    elements.creationDescription.value = shared.description || '';
-    elements.creationTags.value = (shared.tags || []).join(', ');
-    setMode('community');
-    elements.communityOutput.textContent = shared.ownerName
-      ? `Loaded a shared build from ${shared.ownerName}. Save it to add it to your library.`
-      : 'Loaded a shared build. Save it to add it to your library.';
-  } catch {
-    elements.communityOutput.textContent = 'That share link could not be opened. Its build payload needs repair.';
-  }
-}
-
-function loadCommunityCreation(creationId) {
-  const creation = community.findCreation(creationId);
-
-  if (!creation) return;
-
-  try {
-    loadCreationOntoBoard(creation, { center: true });
-    community.setActiveCreation(creation.id);
-    syncCommunity();
-    elements.communityOutput.textContent = `Opened ${creation.title} on the board.`;
-    elements.devOutput.textContent = `Opened ${creation.title}. ${getDesignSettingSummary(getCurrentDesignSettings())}.`;
-    showToast(`Opened ${creation.title}`, { kind: 'success' });
-  } catch {
-    elements.communityOutput.textContent = `Could not open ${creation.title}. Its RLE payload needs repair.`;
-  }
-}
-
-function loadCreationOntoBoard(creation, { center = true } = {}) {
+function loadCreationOntoBoard(creation) {
   const version = creation.currentVersion || {};
   const settings = version.settings
     ? createDesignSettings(version.settings)
@@ -2860,427 +1521,952 @@ function loadCreationOntoBoard(creation, { center = true } = {}) {
   });
 
   state.designSettings = settings;
+  exitCircuit();
   replaceBoard(nextBoard);
   state.authoredStart = ownedSnapshot(nextBoard);
-  resetBoardStorage();
-  markLivingCells(230, 1);
-  if (center) centerWorld();
+  state.history.clear();
+  updateHistoryControls();
   setSpeed(settings.speed);
-  setZoom(settings.zoom);
+  fitLiveCells();
   syncDesignControls();
   markDesignDirty(false);
   updateStats();
 }
 
-async function starCommunityCreation(creationId, { resumed = false } = {}) {
-  if (requiresCloudSignInForSharedAction()) {
-    if (!resumed) queueAccountAction('favorite-creation', { creationId }, 'Sign in to save this creation to Favorites.');
-    return;
-  }
-
-  if (!communityState.profile) {
-    elements.communityOutput.textContent = 'Create an account before starring builds.';
-    return;
-  }
-
-  let nextCreation;
-  try {
-    nextCreation = await community.toggleStar(creationId, communityState.profile.id);
-    if (!nextCreation) return;
-  } catch (error) {
-    elements.communityOutput.textContent = `Could not update star: ${getErrorMessage(error)}`;
-    return;
-  }
-
-  syncCommunity();
-  const starred = nextCreation.starredByViewer
-    ?? nextCreation.starredBy?.includes(communityState.profile.id)
-    ?? false;
-  elements.communityOutput.textContent = starred
-    ? `Starred ${nextCreation.title}.`
-    : `Removed star from ${nextCreation.title}.`;
-  return nextCreation;
+function showProjectsList() {
+  state.studioView = 'projects';
+  renderStudio();
 }
 
-async function cloneCommunityCreation(creationId) {
-  if (requiresCloudSignInForSharedAction()) {
-    showSignInRequired('clone');
-    return;
-  }
-
-  if (!communityState.profile) {
-    elements.communityOutput.textContent = 'Create an account before cloning builds.';
-    return;
-  }
-
-  let remix;
-  try {
-    remix = await community.cloneCreation(creationId, communityState.profile);
-    if (!remix) return;
-  } catch (error) {
-    elements.communityOutput.textContent = `Could not clone build: ${getErrorMessage(error)}`;
-    return;
-  }
-
-  const source = community.findCreation(remix.remixedFromId);
-  syncCommunity();
-  elements.communityOutput.textContent = `Cloned ${source?.title ?? 'build'}. The remix is private until you publish it.`;
-}
-
-async function renderCommunity() {
-  const renderEpoch = (state.communityRenderEpoch || 0) + 1;
-  state.communityRenderEpoch = renderEpoch;
-  renderCommunityAuth();
-  renderPlayerCard();
-  syncCommunityFilterUi();
-
-  if (communityState.profile) {
-    elements.profileName.value = communityState.profile.displayName;
-    elements.profileEmail.value = communityState.profile.email;
-    elements.saveProfile.textContent = isCloudCommunityActive() ? 'Update Profile' : 'Update Account';
-  } else {
-    elements.saveProfile.textContent = isCloudCommunityActive() ? 'Create Profile' : 'Create Account';
-  }
-  const needsAccount = communityAuth.cloudConfigured && !isCloudSignedIn();
-  for (const field of [elements.profileName, elements.profileEmail]) {
-    field.hidden = needsAccount;
-    document.querySelector(`label[for="${field.id}"]`).hidden = needsAccount;
-  }
-
-  elements.communityCount.textContent = `${communityState.creations.length} builds`;
-  renderDevStudio();
-
-  const ownCreations = communityState.profile
-    ? communityState.creations.filter((creation) => creation.ownerId === communityState.profile.id)
-    : communityState.creations;
-  let trending = await community.listTrendingCreations();
-  if (state.communityRenderEpoch !== renderEpoch) return;
-  if (communityAuth.cloudRepo?.listPublicCreations) {
-    state.communityLoadStatus = 'loading';
-    try {
-      const feed = await communityAuth.cloudRepo.listPublicCreations({ q: state.communitySearch, favorites: state.communityFilter === 'favorites' ? 'true' : '', limit: '48' });
-      if (state.communityRenderEpoch !== renderEpoch) return;
-      state.publicCreations = feed.creations || [];
-      if (state.communityFilter === 'favorites' && communityAuth.cloudRepo.getPatternFavorites) {
-        state.patternFavorites = await communityAuth.cloudRepo.getPatternFavorites();
-        if (state.communityRenderEpoch !== renderEpoch) return;
-      }
-      trending = state.publicCreations;
-      state.communityLoadStatus = 'ready';
-    } catch (error) {
-      state.communityLoadStatus = error.status === 401 ? 'auth-required' : 'unavailable';
-      if (state.communityFilter !== 'favorites') elements.communityOutput.textContent = `Community service unavailable: ${getErrorMessage(error)} Device drafts and presets are still available.`;
-    }
-  }
-  const famous = getFamousCommunityDesigns();
-  const newest = [...state.publicCreations, ...ownCreations.filter((creation) => creation.visibility === 'public')].filter((creation, index, all) => all.findIndex((item) => item.id === creation.id) === index)
-    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
-  const remixes = newest.filter((creation) => creation.remixedFromId);
-
-  const shownFamous = state.communityFilter === 'favorites'
-    ? famous.filter((creation) => state.patternFavorites.includes(creation.id.slice(7)))
-    : famous;
-  renderCommunityList(elements.communityFamousList, shownFamous, state.communityFilter === 'favorites' ? 'No preset favorites yet.' : 'Famous designs will appear here.', { source: state.communityFilter === 'favorites' ? 'favorites' : 'famous' });
-  renderCommunityList(elements.trendingList, trending, 'Publish a build to start the trending list.', { source: 'trending' });
-  renderCommunityList(elements.communityList, newest, 'No saved builds yet.', { source: 'new' });
-  renderCommunityList(elements.communityRemixList, remixes, 'Copy or remix a design to start a lineage.', { source: 'remixes' });
-
-  if (!state.selectedCommunityId || !findCommunityDesign(state.selectedCommunityId)) {
-    state.selectedCommunityId = famous[0]?.id || trending[0]?.id || newest[0]?.id || null;
-  }
-  renderCommunityDetail(findCommunityDesign(state.selectedCommunityId));
-}
-
-function setCommunityFilter(value) {
-  state.communityFilter = value || 'all';
-  const targetPath = state.communityFilter === 'favorites' ? '/community/favorites' : '/community';
-  if (window.location.pathname !== targetPath) window.history.pushState({}, '', targetPath);
-  if (elements.communityFilter) elements.communityFilter.value = state.communityFilter;
-  syncCommunityFilterUi();
-  renderCommunity();
-}
-
-function syncCommunityFilterUi() {
-  if (!elements.communityFilterLabel || !elements.communityFilterOptions.length) return;
-
-  const selected = [...elements.communityFilterOptions]
-    .find((option) => option.dataset.communityFilterValue === state.communityFilter)
-    || elements.communityFilterOptions[0];
-
-  elements.communityFilterLabel.textContent = selected.textContent;
-  for (const option of elements.communityFilterOptions) {
-    option.setAttribute('aria-selected', String(option === selected));
-    option.classList.toggle('active', option === selected);
+function renderStudio() {
+  const studio = state.mode === 'studio';
+  elements.body.dataset.studioView = state.studioView;
+  elements.projectHeader.hidden = !studio || state.studioView !== 'project';
+  elements.projectsPage.hidden = !studio || state.studioView !== 'projects';
+  elements.inspector.hidden = !studio;
+  elements.railKindTabs.hidden = !studio;
+  elements.railTitle.textContent = studio ? 'Components' : 'Patterns';
+  if (!studio && state.railTab === 'logic') setRailTab('patterns');
+  if (studio && state.studioView === 'projects') renderProjectsPage();
+  if (studio && state.studioView === 'project') {
+    const creation = getActiveCreation();
+    elements.unpublishProject.disabled = creation?.visibility !== 'public';
+    elements.archiveProject.disabled = !creation;
+    elements.deleteProject.disabled = !creation;
+    renderInspector();
   }
 }
 
-function renderPlayerCard() {
-  if (!elements.playerName || !elements.playerMeta) return;
-
-  if (communityState.profile) {
-    elements.playerName.textContent = communityState.profile.displayName || 'Local Builder';
-    elements.playerMeta.textContent = communityState.profile.email || communityState.profile.username || 'Local profile active';
+function renderProjectsPage() {
+  const creations = getOwnCreations();
+  elements.projectsList.innerHTML = '';
+  if (creations.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'projects-empty';
+    empty.textContent = 'No projects yet. Start one and it will be saved on this device.';
+    elements.projectsList.append(empty);
     return;
   }
-
-  elements.playerName.textContent = 'Guest Builder';
-  elements.playerMeta.textContent = 'Play around or create a profile';
+  for (const creation of creations) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'project-card';
+    button.dataset.projectId = creation.id;
+    button.setAttribute('role', 'listitem');
+    const updated = formatDate(creation.updatedAt);
+    button.innerHTML = `
+      <strong>${escapeHtml(creation.title)}</strong>
+      <span>${Number(creation.currentVersion?.population || 0).toLocaleString()} cells · ${creation.currentVersion?.width || 0} × ${creation.currentVersion?.height || 0}</span>
+      <span>${creation.visibility === 'public' ? 'Published' : 'Private'} · updated ${escapeHtml(updated)}</span>
+    `;
+    elements.projectsList.append(button);
+  }
 }
 
-function renderDevStudio() {
-  if (!elements.devPanel) return;
-
-  const profile = communityState.profile;
-  const creations = profile
-    ? communityState.creations.filter((creation) => creation.ownerId === profile.id && !creation.archivedAt)
-    : communityState.creations.filter((creation) => !creation.archivedAt);
-  const published = creations.filter((creation) => creation.visibility === 'public');
-  const drafts = creations.filter((creation) => creation.visibility !== 'public');
-  const starredCount = communityState.creations.filter((creation) => creation.starredBy?.includes(profile?.id)).length;
-
-  if (elements.devProfileName) elements.devProfileName.textContent = profile?.displayName || 'Local Builder';
-  if (elements.devProfileMeta) {
-    elements.devProfileMeta.textContent = profile
-      ? `${profile.email || profile.username} · ${creations.length} saved designs`
-      : 'Drafts save on this device. Sign in to sync and publish.';
-  }
-  if (elements.devDesignCount) elements.devDesignCount.textContent = creations.length;
-  if (elements.devDraftCount) elements.devDraftCount.textContent = drafts.length;
-  if (elements.devPublishedCount) elements.devPublishedCount.textContent = published.length;
-  if (elements.devStarredCount) elements.devStarredCount.textContent = starredCount;
-  if (elements.devDesignTitle && document.activeElement !== elements.devDesignTitle) {
-    elements.devDesignTitle.value = state.activeDesignSession?.title || elements.creationTitle?.value || 'Untitled design';
-  }
-  const activeCreation = state.activeDesignSession?.creationId
-    ? community.findCreation(state.activeDesignSession.creationId)
-    : null;
-  if (activeCreation && !state.designDirty) setDesignMetadataFields(activeCreation);
-  if (elements.devSessionState) {
-    elements.devSessionState.textContent = activeCreation
-      ? `Version ${activeCreation.currentVersion?.versionNumber || 1}`
-      : state.activeDesignSession?.sourceTitle ? 'Clone' : 'New';
-  }
-  if (elements.saveDesign) elements.saveDesign.textContent = activeCreation ? 'Save Version' : 'Save Draft';
-  if (elements.unpublishDesign) elements.unpublishDesign.disabled = activeCreation?.visibility !== 'public';
-  if (elements.archiveDesign) elements.archiveDesign.disabled = !activeCreation;
-  if (elements.deleteDesign) elements.deleteDesign.disabled = !activeCreation;
-  renderVersionHistory(activeCreation);
-  renderProjectList(creations);
-  renderTutorials();
-  syncDesignControls();
+function formatDate(value) {
+  const date = new Date(value || Date.now());
+  if (Number.isNaN(date.getTime())) return 'recently';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function renderVersionHistory(creation) {
-  if (!elements.devVersionList || !elements.devVersionCount) return;
   const versions = [...(creation?.versions || (creation?.currentVersion ? [creation.currentVersion] : []))]
     .sort((left, right) => Number(right.versionNumber || 0) - Number(left.versionNumber || 0));
-  elements.devVersionCount.textContent = String(versions.length);
-  elements.devVersionList.innerHTML = '';
-
+  elements.versionHistory.innerHTML = '';
   if (versions.length === 0) {
-    elements.devVersionList.innerHTML = '<p class="community-empty">Save the draft to create version 1.</p>';
+    elements.versionHistory.innerHTML = '<p class="inspector-note">Save to create version 1.</p>';
     return;
   }
-
   for (const version of versions) {
     const row = document.createElement('div');
     const current = version.id === creation.currentVersion?.id;
     row.className = `version-row${current ? ' current' : ''}`;
     row.innerHTML = `
-      <span><strong>Version ${version.versionNumber || 1}</strong><small>${current ? 'Current' : `${version.population || 0} cells`}</small></span>
-      <button type="button" data-restore-version-id="${escapeHtml(version.id)}" ${current ? 'disabled' : ''}>Restore</button>
+      <span><strong>Version ${version.versionNumber || 1}</strong><small>${current ? 'Current' : `${Number(version.population || 0).toLocaleString()} cells`}</small></span>
+      ${current ? '' : `<button class="button button-small" type="button" data-restore-version-id="${escapeHtml(version.id)}">Restore</button>`}
     `;
-    elements.devVersionList.append(row);
+    elements.versionHistory.append(row);
   }
 }
 
-function renderProjectList(creations) {
-  if (!elements.devProjectList) return;
-  elements.devProjectList.innerHTML = '';
+/* ---------------------------------------------------------------------------
+ * Circuits (Studio → Logic)
+ * ------------------------------------------------------------------------- */
 
-  if (creations.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'community-empty';
-    empty.textContent = 'Saved drafts and published designs open here.';
-    elements.devProjectList.append(empty);
-    return;
-  }
-
-  for (const creation of creations) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'project-card';
-    button.dataset.devProjectId = creation.id;
-    button.innerHTML = `
-      <strong>${escapeHtml(creation.title)}</strong>
-      <span>${escapeHtml(getDesignSettingSummary(creation.currentVersion?.settings || {
-        width: creation.currentVersion?.width,
-        height: creation.currentVersion?.height,
-      }))}</span>
-      <small>${creation.visibility === 'public' ? 'Published' : 'Draft'} · ${creation.starCount || 0} stars</small>
-    `;
-    elements.devProjectList.append(button);
-  }
+function circuitInput(id) {
+  return state.circuitInputs[id] || {};
 }
 
-function renderTutorials() {
-  if (!elements.tutorialGroups || !elements.tutorialList) return;
-  elements.tutorialGroups.innerHTML = '';
-  elements.tutorialList.innerHTML = '';
-  if (elements.tutorialCount) elements.tutorialCount.textContent = tutorialCatalog.length;
-
-  for (const group of tutorialGroups) {
-    const button = document.createElement('button');
-    const active = group.id === state.activeTutorialGroup;
-    button.type = 'button';
-    button.className = 'pattern-tab';
-    button.dataset.tutorialGroup = group.id;
-    button.classList.toggle('active', active);
-    button.innerHTML = `<span>${group.title}</span><small>${getTutorialsByGroup(group.id).length}</small>`;
-    elements.tutorialGroups.append(button);
-  }
-
-  for (const tutorial of getTutorialsByGroup(state.activeTutorialGroup)) {
-    const card = document.createElement('article');
-    card.className = 'tutorial-card';
-    card.innerHTML = `
-      <div>
-        <strong>${escapeHtml(tutorial.title)}</strong>
-        <a href="${tutorial.sourceUrl}" target="_blank" rel="noreferrer">Source</a>
-      </div>
-      <p>${escapeHtml(tutorial.goal)}</p>
-      <small>${escapeHtml(tutorial.modifyPrompt)}</small>
-      <button type="button" data-tutorial-title="${escapeHtml(tutorial.title)}" ${tutorial.patternId ? `data-tutorial-pattern="${tutorial.patternId}"` : ''}>
-        ${tutorial.patternId ? 'Load Pattern' : 'Use Reference'}
-      </button>
-    `;
-    elements.tutorialList.append(card);
-  }
+function exitCircuit() {
+  if (!state.circuit) return;
+  state.circuit = null;
+  state.circuitOutputs = null;
+  state.truthRows = null;
+  updatePresetSelection();
 }
 
-function renderCommunityList(container, creations, emptyText, { source }) {
-  if (!container) return;
-
-  container.innerHTML = '';
-  const visible = getFilteredCommunityItems(creations, source);
-  const actionCopy = getCommunityActionCopy();
-
-  if (visible.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'community-empty';
-    empty.textContent = emptyText;
-    container.append(empty);
-    return;
-  }
-
-  for (const creation of visible) {
-    const card = document.createElement('article');
-    card.className = 'community-card';
-    card.classList.toggle('active', state.selectedCommunityId === creation.id);
-    card.dataset.communityAction = 'detail';
-    card.dataset.creationId = creation.id;
-    card.tabIndex = 0;
-    card.setAttribute('role', 'button');
-    card.setAttribute('aria-label', `Preview ${creation.title}`);
-    const starred = creation.starredByViewer
-      ?? (communityState.profile && creation.starredBy?.includes(communityState.profile.id));
-    card.innerHTML = `
-      <button class="community-preview" type="button" data-community-action="detail" data-creation-id="${creation.id}" aria-label="View ${escapeHtml(creation.title)}">
-        ${getCommunityPreviewHtml(creation)}
-      </button>
-      <div>
-        <strong>${escapeHtml(creation.title)}</strong>
-        <span>${creation.id.startsWith('famous-') ? 'Preset · source: ' : `${creation.visibility === 'public' ? 'Published' : 'Draft'} by `}${escapeHtml(creation.ownerName)}</span>
-      </div>
-      <p>${escapeHtml(creation.description || 'No description yet.')}</p>
-      <div class="community-tags">${creation.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>
-      <div class="community-stats">
-        ${creation.id.startsWith('famous-') ? '<span>Library preset</span>' : `<span>${creation.starCount || 0} stars</span>
-        <span>${creation.commentCount || getCommunityComments(creation).length} comments</span>
-        <span>${creation.cloneCount || 0} remixes</span>`}
-        <span>${creation.currentVersion?.population || 0} cells</span>
-      </div>
-      <div class="community-actions">
-        <button type="button" data-community-action="play-copy" data-creation-id="${creation.id}">${actionCopy.play}</button>
-        <button type="button" data-community-action="edit-copy" data-creation-id="${creation.id}">${actionCopy.edit}</button>
-        <button type="button" data-community-action="star" data-creation-id="${creation.id}">${starred ? 'Unstar' : actionCopy.star}</button>
-        <button type="button" data-community-action="copy" data-creation-id="${creation.id}">${actionCopy.share}</button>
-      </div>
-    `;
-    container.append(card);
-  }
+function openCircuitExperiment(id, { fit = true } = {}) {
+  const experiment = buildCircuitExperiment(id, circuitInput(id));
+  state.circuit = experiment;
+  state.circuitOutputs = null;
+  if (state.truthRows?.id !== id) state.truthRows = null;
+  state.designSettings = mergeDesignSettings(state.designSettings, {
+    gridPreset: 'custom',
+    width: experiment.board.width,
+    height: experiment.board.height,
+    wrapping: false,
+  });
+  replaceBoard(ownedSnapshot(experiment.board));
+  state.authoredStart = ownedSnapshot(experiment.authoredBoard);
+  state.history.clear();
+  updateHistoryControls();
+  loadSimulation(state.board, { wrapping: false });
+  if (fit) fitCircuit();
+  markDesignDirty(true);
+  syncDesignControls();
+  updatePresetSelection();
+  renderInspector();
 }
 
-function getCommunityPreviewHtml(creation) {
+function fitCircuit() {
+  if (!state.circuit) return;
+  fitRegion(getCircuitMarkers(state.circuit.id).fitRegion, { padding: 16, maxZoom: 1 });
+}
+
+function setCircuitInput(name, value) {
+  if (!state.circuit) return;
+  state.circuitInputs[state.circuit.id] ||= {};
+  state.circuitInputs[state.circuit.id][name] = Boolean(value);
+  openCircuitExperiment(state.circuit.id, { fit: false });
+}
+
+async function runCircuitExperiment() {
+  if (!state.circuit || state.circuitRunning) return;
+  const experiment = state.circuit;
+  state.playing = false;
+  updatePlayButton();
+  if (state.board.generation > 0 || state.board.generation > experiment.observeGeneration) resetToStart();
+  state.circuitRunning = true;
+  state.circuitOutputs = experiment.outputs.map((port) => ({ id: port.id, label: port.label, settled: false, high: null }));
+  renderInspector();
   try {
-    const preview = creation.previewConfig?.version === 1
-      ? creation.previewConfig
-      : createCreationPreviewConfig(creation);
-    return getPreviewGridHtml(preview);
-  } catch {
-    return '<span class="preview-grid preview-grid-empty"></span>';
+    const load = state.simulationLoad;
+    await load;
+    if (load !== state.simulationLoad) return;
+    const remaining = Math.max(0, experiment.observeGeneration - state.board.generation);
+    const snapshot = remaining ? await state.simulation.advance(remaining, {
+      onSnapshot: (board) => {
+        state.board = ownedSnapshot(board);
+        updateStats();
+        renderRunProgress();
+      },
+    }) : ownedSnapshot();
+    state.board = ownedSnapshot(snapshot);
+    state.circuitOutputs = readCircuitOutputs(experiment, state.board);
+    updateStats();
+    const summary = state.circuitOutputs.map((output) => `${output.label}: ${output.high ? 'HIGH' : 'LOW'}`).join(' · ');
+    showToast(summary, { kind: 'success' });
+  } catch (error) {
+    if (error?.name !== 'AbortError') showToast(`Run stopped: ${getErrorMessage(error)}`, { kind: 'error' });
+    state.circuitOutputs = null;
+  } finally {
+    state.circuitRunning = false;
+    renderInspector();
   }
 }
 
-function getFilteredCommunityItems(creations, source) {
-  const filter = state.communityFilter;
-  if (filter === 'favorites' && !['trending', 'favorites'].includes(source)) return [];
-  if (!['all', 'favorites'].includes(filter) && filter !== source) return [];
-
-  const query = state.communitySearch.trim().toLowerCase();
-  if (!query) return creations;
-
-  return creations.filter((creation) => [
-    creation.title,
-    creation.ownerName,
-    creation.description,
-    ...(creation.tags || []),
-  ].some((value) => String(value || '').toLowerCase().includes(query)));
+async function fillTruthTable() {
+  if (!state.circuit || state.circuitRunning) return;
+  const experiment = state.circuit;
+  const rows = getInputCombinations(experiment.inputs ? Object.keys(experiment.inputs) : []);
+  state.circuitRunning = true;
+  state.truthRows = { id: experiment.id, rows: rows.map((inputs) => ({ inputs, outputs: null })) };
+  state.playing = false;
+  updatePlayButton();
+  renderInspector();
+  try {
+    for (const row of state.truthRows.rows) {
+      const built = buildCircuitExperiment(experiment.id, row.inputs);
+      await state.simulation.load(ownedSnapshot(built.board), { wrapping: false });
+      const board = await state.simulation.advance(built.observeGeneration);
+      row.outputs = readCircuitOutputs(built, board);
+      renderTruthTable();
+    }
+    showToast('Truth table complete', { kind: 'success' });
+  } catch (error) {
+    if (error?.name !== 'AbortError') showToast(`Run stopped: ${getErrorMessage(error)}`, { kind: 'error' });
+  } finally {
+    state.circuitRunning = false;
+    // Put the authored experiment back on the board and in the worker.
+    openCircuitExperiment(experiment.id, { fit: false });
+  }
 }
+
+function renderInspector() {
+  const experiment = state.circuit;
+  elements.circuitSection.hidden = !experiment;
+  renderVersionHistory(getActiveCreation());
+  if (!experiment) return;
+
+  const card = GATE_CARDS[experiment.id] || { name: experiment.title };
+  elements.circuitName.textContent = `${card.name}: ${card.note || experiment.description}`;
+
+  elements.inputsList.innerHTML = '';
+  for (const [name, value] of Object.entries(experiment.inputs || {})) {
+    const row = document.createElement('label');
+    row.className = 'switch-row';
+    row.innerHTML = `<span>${name.toUpperCase()}</span><input class="switch" type="checkbox" role="switch" data-input="${name}" aria-label="Input ${name.toUpperCase()}" ${value ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
+    elements.inputsList.append(row);
+  }
+
+  elements.outputsList.innerHTML = '';
+  for (const port of experiment.outputs) {
+    const output = state.circuitOutputs?.find((candidate) => candidate.id === port.id) || null;
+    const lampState = getLampState(output);
+    const row = document.createElement('div');
+    row.className = 'lamp-row';
+    row.innerHTML = `<span>${escapeHtml(port.label)}</span><span class="lamp" data-output="${port.id}" data-state="${lampState}">${getLampLabel(lampState)}</span>`;
+    elements.outputsList.append(row);
+  }
+
+  elements.runCircuit.disabled = state.circuitRunning;
+  elements.fillTruthTable.disabled = state.circuitRunning;
+  elements.runProgress.setAttribute('aria-valuemax', String(experiment.observeGeneration));
+  renderRunProgress();
+  renderTruthTable();
+}
+
+function renderRunProgress() {
+  const experiment = state.circuit;
+  if (!experiment) return;
+  const running = state.circuitRunning && state.circuitOutputs?.some((output) => output.settled === false);
+  const settled = Boolean(state.circuitOutputs?.length) && !running;
+  const generation = Math.min(state.board.generation, experiment.observeGeneration);
+  elements.runProgress.hidden = !running && !settled;
+  elements.runProgressText.hidden = !running && !settled;
+  elements.runProgress.setAttribute('aria-valuenow', String(generation));
+  elements.runProgressBar.style.width = `${(generation / experiment.observeGeneration) * 100}%`;
+  elements.runProgressText.textContent = `generation ${generation.toLocaleString()} / ${experiment.observeGeneration.toLocaleString()}`;
+}
+
+function renderTruthTable() {
+  const experiment = state.circuit;
+  if (!experiment) return;
+  const inputNames = Object.keys(experiment.inputs || {});
+  const outputs = experiment.outputs;
+  const rows = state.truthRows?.id === experiment.id
+    ? state.truthRows.rows
+    : getInputCombinations(inputNames).map((inputs) => ({ inputs, outputs: null }));
+  const header = `<tr>${inputNames.map((name) => `<th scope="col">${name.toUpperCase()}</th>`).join('')}${outputs.map((port) => `<th scope="col">${escapeHtml(port.label)}</th>`).join('')}</tr>`;
+  const body = rows.map((row) => `<tr>${inputNames.map((name) => `<td>${row.inputs[name] ? 1 : 0}</td>`).join('')}${outputs.map((port) => {
+    const output = row.outputs?.find((candidate) => candidate.id === port.id);
+    if (!output) return '<td class="pending">·</td>';
+    return `<td class="${output.high ? 'high' : 'low'}">${output.high ? 1 : 0}</td>`;
+  }).join('')}</tr>`).join('');
+  const caption = state.truthRows?.id === experiment.id
+    ? (state.circuitRunning ? '<caption>Running every combination…</caption>' : '<caption>Measured from real probe cells.</caption>')
+    : '<caption>Run all to measure every combination.</caption>';
+  elements.truthTable.innerHTML = `<thead>${header}</thead><tbody>${body}</tbody>${caption}`;
+}
+
+/* ---------------------------------------------------------------------------
+ * Feedback
+ * ------------------------------------------------------------------------- */
+
+function triggerHaptic(action) {
+  const pattern = getHapticPattern(action);
+  if (pattern.length > 0) navigator.vibrate?.(pattern);
+}
+
+function showToast(message, { kind = 'info' } = {}) {
+  window.clearTimeout(feedbackTimer);
+  elements.toast.textContent = message;
+  elements.toast.dataset.kind = kind;
+  elements.toast.hidden = false;
+  feedbackTimer = window.setTimeout(() => {
+    elements.toast.hidden = true;
+  }, 2500);
+}
+
+/* ---------------------------------------------------------------------------
+ * Canvas geometry
+ * ------------------------------------------------------------------------- */
+
+function resizeCanvas() {
+  const pixelRatio = window.devicePixelRatio || 1;
+  const width = elements.canvasHost.clientWidth;
+  const height = elements.canvasHost.clientHeight;
+  if (!width || !height) return;
+  const previous = { width: canvas.clientWidth, height: canvas.clientHeight };
+  canvas.width = Math.floor(width * pixelRatio);
+  canvas.height = Math.floor(height * pixelRatio);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  if (state.pendingFit) {
+    const { region, options } = state.pendingFit;
+    state.pendingFit = null;
+    state.viewInitialized = true;
+    fitRegion(region, options);
+  } else if (!state.viewInitialized || state.pendingCenter) {
+    state.viewInitialized = true;
+    state.pendingCenter = false;
+    centerWorld();
+  } else if (previous.width && previous.height) {
+    // Keep the board centre stable when the frame changes size.
+    state.panX += (width - previous.width) / 2;
+    state.panY += (height - previous.height) / 2;
+  }
+  render();
+}
+
+function getWorldViewport() {
+  return { left: 0, top: 0, width: canvas.clientWidth || 1, height: canvas.clientHeight || 1 };
+}
+
+function centerWorld() {
+  if (!canvas.clientWidth) {
+    // The board is hidden (another section is open); centre once it has a size.
+    state.pendingCenter = true;
+    state.pendingFit = null;
+    return;
+  }
+  const cellSize = getCellSize();
+  const viewport = getWorldViewport();
+  state.panX = (viewport.width - state.board.width * cellSize) / 2;
+  state.panY = (viewport.height - state.board.height * cellSize) / 2;
+}
+
+function getCellSize() {
+  return BASE_CELL_SIZE * state.zoom;
+}
+
+function screenToCell(localX, localY) {
+  const cellSize = getCellSize();
+  return {
+    x: Math.floor((localX - state.panX) / cellSize),
+    y: Math.floor((localY - state.panY) / cellSize),
+  };
+}
+
+function setZoom(nextZoom, anchorX = canvas.clientWidth / 2, anchorY = canvas.clientHeight / 2) {
+  const previousCellSize = getCellSize();
+  const worldX = (anchorX - state.panX) / previousCellSize;
+  const worldY = (anchorY - state.panY) / previousCellSize;
+
+  state.zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom));
+
+  const nextCellSize = getCellSize();
+  state.panX = anchorX - worldX * nextCellSize;
+  state.panY = anchorY - worldY * nextCellSize;
+  elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
+}
+
+function fitRegion(region, { padding = 24, maxZoom = MAX_ZOOM } = {}) {
+  if (!canvas.clientWidth) {
+    state.pendingFit = { region, options: { padding, maxZoom } };
+    state.pendingCenter = false;
+    return;
+  }
+  const viewport = getWorldViewport();
+  const zoom = getFitZoom({
+    viewportWidth: viewport.width,
+    viewportHeight: viewport.height,
+    regionWidth: region.width,
+    regionHeight: region.height,
+    baseCellSize: BASE_CELL_SIZE,
+    padding,
+    minZoom: MIN_ZOOM,
+    maxZoom,
+  });
+  state.zoom = zoom;
+  const cellSize = getCellSize();
+  state.panX = (viewport.width - region.width * cellSize) / 2 - region.x * cellSize;
+  state.panY = (viewport.height - region.height * cellSize) / 2 - region.y * cellSize;
+  elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
+}
+
+function fitBoard() {
+  fitRegion({ x: 0, y: 0, width: state.board.width, height: state.board.height }, { padding: 24 });
+}
+
+function fitLiveCells() {
+  const coordinates = getLiveCoordinates();
+  if (!coordinates.length) {
+    fitBoard();
+    return;
+  }
+  const bounds = getPatternBounds(coordinates);
+  const margin = 8;
+  fitRegion({
+    x: bounds.minX - margin,
+    y: bounds.minY - margin,
+    width: bounds.width + margin * 2,
+    height: bounds.height + margin * 2,
+  }, { padding: 24, maxZoom: 1.6 });
+}
+
+function setSpeed(nextSpeed) {
+  state.speed = Math.min(40, Math.max(1, nextSpeed));
+  elements.speedLabel.textContent = `${state.speed} gen/s`;
+  for (const item of elements.speedMenu.querySelectorAll('[data-speed]')) {
+    item.setAttribute('aria-checked', String(Number(item.dataset.speed) === state.speed));
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Drawing tools and simulation stepping
+ * ------------------------------------------------------------------------- */
+
+function paintCell(cellX, cellY, alive) {
+  if (!state.designSettings.wrapping && (
+    cellX < 0 || cellY < 0 || cellX >= state.board.width || cellY >= state.board.height
+  )) {
+    return;
+  }
+
+  const x = wrap(cellX, state.board.width);
+  const y = wrap(cellY, state.board.height);
+  const index = cellIndex(state.board, x, y);
+  const nextValue = alive ? 1 : 0;
+
+  if (state.board.cells[index] === nextValue) return;
+
+  state.board.cells[index] = nextValue;
+  state.authoredStart = ownedSnapshot();
+  markDesignDirty(true);
+  updateStats();
+}
+
+function applyToolAt(localX, localY) {
+  const cell = screenToCell(localX, localY);
+  const key = `${wrap(cell.x, state.board.width)},${wrap(cell.y, state.board.height)}`;
+
+  if (state.pointer.lastCell === key) return;
+
+  if (state.pointer.mode === 'draw') paintCell(cell.x, cell.y, true);
+  if (state.pointer.mode === 'erase') paintCell(cell.x, cell.y, false);
+  if (state.pointer.mode === 'stamp') stampPattern(cell.x, cell.y);
+
+  state.pointer.lastCell = key;
+}
+
+function getCellAliveAt(localX, localY) {
+  const cell = screenToCell(localX, localY);
+  return getCell(state.board, cell.x, cell.y);
+}
+
+async function stepSimulation() {
+  if (state.simulationStepPending || state.circuitRunning) return;
+  state.simulationStepPending = true;
+  try {
+    const load = state.simulationLoad;
+    await load;
+    if (load !== state.simulationLoad) return;
+    const next = await state.simulation.advance(1);
+    state.board = ownedSnapshot(next);
+    updateStats();
+  } catch (error) {
+    if (error?.name !== 'AbortError') showToast(`Simulation stopped: ${getErrorMessage(error)}`, { kind: 'error' });
+  } finally {
+    state.simulationStepPending = false;
+  }
+}
+
+function setPlaying(playing) {
+  if (state.circuitRunning) return;
+  state.playing = playing;
+  if (!playing) loadSimulation();
+  state.accumulator = 0;
+  updatePlayButton();
+}
+
+function randomSoup() {
+  beginAuthoringCommand();
+  state.board = createRandomBoard(state.board.width, state.board.height, 0.18);
+  exitCircuit();
+  finishAuthoringCommand();
+  renderInspector();
+}
+
+function clearWorld() {
+  beginAuthoringCommand();
+  state.board = clearBoard(state.board);
+  exitCircuit();
+  finishAuthoringCommand();
+  renderInspector();
+  showToast('Board cleared', { kind: 'success' });
+}
+
+function openRleDialog(mode) {
+  elements.rleError.hidden = true;
+  elements.rleError.textContent = '';
+  if (mode === 'export') {
+    const coordinates = getLiveCoordinates();
+    elements.rleDialogTitle.textContent = 'Export RLE';
+    elements.rleNote.textContent = coordinates.length
+      ? `${coordinates.length.toLocaleString()} live cells as RLE text.`
+      : 'The board is empty, so there is nothing to export yet.';
+    elements.rleField.value = encodeRle(coordinates);
+    elements.rleCopy.hidden = false;
+    elements.rleStamp.hidden = true;
+  } else {
+    elements.rleDialogTitle.textContent = 'Import RLE';
+    elements.rleNote.textContent = 'Paste RLE text from a Life pattern page. The pattern becomes a stamp you can place.';
+    elements.rleField.value = '';
+    elements.rleCopy.hidden = true;
+    elements.rleStamp.hidden = false;
+  }
+  elements.rleDialog.showModal();
+  if (mode === 'export') elements.rleField.select();
+  else elements.rleField.focus();
+}
+
+function importRleFromDialog() {
+  try {
+    const pattern = parseRle(elements.rleField.value);
+    if (!pattern.coordinates.length) throw new Error('That RLE has no live cells.');
+    state.selectedPreset = {
+      id: 'rle-import',
+      name: 'Imported RLE',
+      note: `${pattern.width} × ${pattern.height}`,
+      coordinates: pattern.coordinates,
+    };
+    state.stampRotation = 0;
+    state.stampFlipX = false;
+    setTool('stamp');
+    updatePresetSelection();
+    elements.rleDialog.close();
+    showToast('Click the board to place the pattern', { kind: 'info' });
+  } catch (error) {
+    elements.rleError.hidden = false;
+    elements.rleError.textContent = error instanceof Error ? error.message : 'Could not read that RLE.';
+  }
+}
+
+async function copyRleFromDialog() {
+  try {
+    await navigator.clipboard.writeText(elements.rleField.value);
+    showToast('RLE copied', { kind: 'success' });
+    elements.rleDialog.close();
+  } catch {
+    elements.rleField.select();
+    showToast('Select the text and copy it', { kind: 'info' });
+  }
+}
+
+function getLiveCoordinates() {
+  const coordinates = [];
+
+  for (let y = 0; y < state.board.height; y += 1) {
+    for (let x = 0; x < state.board.width; x += 1) {
+      if (getCell(state.board, x, y)) coordinates.push([x, y]);
+    }
+  }
+
+  return coordinates;
+}
+
+/* ---------------------------------------------------------------------------
+ * Rendering
+ * ------------------------------------------------------------------------- */
+
+function readPalette() {
+  const style = getComputedStyle(document.documentElement);
+  const read = (name) => style.getPropertyValue(name).trim();
+  palette = {
+    bg: read('--bg'),
+    canvas: read('--canvas'),
+    grid: read('--grid'),
+    gridMajor: read('--grid-major'),
+    cell: read('--cell'),
+    line: read('--line'),
+    accent: read('--accent'),
+    good: read('--good'),
+    muted: read('--muted'),
+    text: read('--text'),
+  };
+}
+
+function rgbaFromHex(hex, alpha) {
+  const normalized = String(hex || '#000000').replace('#', '');
+  const value = /^[0-9a-f]{6}$/i.test(normalized) ? normalized : '000000';
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function isCanvasVisible() {
+  return state.mode !== 'community' && !(state.mode === 'studio' && state.studioView === 'projects') && canvas.clientWidth > 0;
+}
+
+function render() {
+  if (!isCanvasVisible()) return;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  const cellSize = getCellSize();
+  const worldWidth = state.board.width * cellSize;
+  const worldHeight = state.board.height * cellSize;
+  const panX = Math.round(state.panX);
+  const panY = Math.round(state.panY);
+
+  ctx.fillStyle = palette.bg;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.save();
+  ctx.translate(panX, panY);
+
+  ctx.fillStyle = palette.canvas;
+  ctx.fillRect(0, 0, worldWidth, worldHeight);
+
+  const visible = getVisibleCellRange(cellSize, panX, panY, width, height);
+  drawGrid(cellSize, worldWidth, worldHeight, visible);
+  drawCells(cellSize, visible);
+  drawCircuitMarkers(cellSize);
+  drawStampPreview(cellSize);
+  drawSelection(cellSize);
+
+  ctx.strokeStyle = palette.line;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, worldWidth - 1, worldHeight - 1);
+
+  ctx.restore();
+}
+
+function getVisibleCellRange(cellSize, panX, panY, width, height) {
+  return {
+    startX: Math.max(0, Math.floor(-panX / cellSize) - 1),
+    endX: Math.min(state.board.width, Math.ceil((width - panX) / cellSize) + 1),
+    startY: Math.max(0, Math.floor(-panY / cellSize) - 1),
+    endY: Math.min(state.board.height, Math.ceil((height - panY) / cellSize) + 1),
+  };
+}
+
+function drawGrid(cellSize, worldWidth, worldHeight, visible) {
+  if (cellSize < 3) return;
+  const { startX, endX, startY, endY } = visible;
+  ctx.lineWidth = 1;
+
+  if (cellSize >= 6) {
+    ctx.strokeStyle = palette.grid;
+    ctx.beginPath();
+    for (let x = startX; x <= endX; x += 1) {
+      const px = Math.round(x * cellSize) + 0.5;
+      ctx.moveTo(px, 0);
+      ctx.lineTo(px, worldHeight);
+    }
+    for (let y = startY; y <= endY; y += 1) {
+      const py = Math.round(y * cellSize) + 0.5;
+      ctx.moveTo(0, py);
+      ctx.lineTo(worldWidth, py);
+    }
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = palette.gridMajor;
+  ctx.beginPath();
+  for (let x = Math.max(0, Math.ceil(startX / 10) * 10); x <= endX; x += 10) {
+    const px = Math.round(x * cellSize) + 0.5;
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, worldHeight);
+  }
+  for (let y = Math.max(0, Math.ceil(startY / 10) * 10); y <= endY; y += 10) {
+    const py = Math.round(y * cellSize) + 0.5;
+    ctx.moveTo(0, py);
+    ctx.lineTo(worldWidth, py);
+  }
+  ctx.stroke();
+}
+
+function drawCells(cellSize, visible) {
+  const { startX, endX, startY, endY } = visible;
+  const inset = cellSize >= 6 ? 1 : 0;
+  const size = Math.max(1, cellSize - inset);
+  const cells = state.board.cells;
+  const boardWidth = state.board.width;
+  ctx.fillStyle = palette.cell;
+
+  for (let y = startY; y < endY; y += 1) {
+    const row = y * boardWidth;
+    const py = y * cellSize + inset;
+    for (let x = startX; x < endX; x += 1) {
+      if (cells[row + x] !== 1) continue;
+      ctx.fillRect(x * cellSize + inset, py, size, size);
+    }
+  }
+}
+
+function drawSelection(cellSize) {
+  if (!state.selection) return;
+  const { x, y, width, height } = state.selection;
+  ctx.save();
+  ctx.fillStyle = rgbaFromHex(palette.accent, 0.12);
+  ctx.strokeStyle = palette.accent;
+  ctx.lineWidth = 1;
+  ctx.fillRect(x * cellSize, y * cellSize, width * cellSize, height * cellSize);
+  ctx.strokeRect(Math.round(x * cellSize) + 0.5, Math.round(y * cellSize) + 0.5, Math.round(width * cellSize) - 1, Math.round(height * cellSize) - 1);
+  ctx.restore();
+}
+
+function drawStampPreview(cellSize) {
+  if (state.tool !== 'stamp' || !state.selectedPreset || !state.hoverCell) return;
+
+  const coordinates = getTransformedPresetCoordinates();
+  const bounds = getPatternBounds(coordinates);
+  const originX = state.hoverCell.x - Math.floor(bounds.width / 2);
+  const originY = state.hoverCell.y - Math.floor(bounds.height / 2);
+  const inset = cellSize >= 6 ? 1 : 0;
+  const size = Math.max(1, cellSize - inset);
+
+  ctx.save();
+  ctx.fillStyle = rgbaFromHex(palette.accent, 0.4);
+  for (const [patternX, patternY] of coordinates) {
+    const x = state.designSettings.wrapping ? wrap(originX + patternX, state.board.width) : originX + patternX;
+    const y = state.designSettings.wrapping ? wrap(originY + patternY, state.board.height) : originY + patternY;
+    if (x < 0 || y < 0 || x >= state.board.width || y >= state.board.height) continue;
+    ctx.fillRect(x * cellSize + inset, y * cellSize + inset, size, size);
+  }
+  ctx.restore();
+}
+
+function drawCircuitMarkers(cellSize) {
+  const experiment = state.circuit;
+  if (!experiment || experiment.board.width !== state.board.width || experiment.board.height !== state.board.height) return;
+  const markers = getCircuitMarkers(experiment.id);
+  const { origin, tile } = markers;
+  const labelSize = 12;
+  ctx.save();
+  ctx.strokeStyle = palette.accent;
+  ctx.fillStyle = palette.accent;
+  ctx.lineWidth = 1;
+  ctx.font = `500 ${labelSize}px ${getComputedStyle(document.documentElement).getPropertyValue('--mono')}`;
+  ctx.textBaseline = 'middle';
+
+  // Gate tile outline.
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(Math.round(origin.x * cellSize) + 0.5, Math.round(origin.y * cellSize) + 0.5, Math.round(tile * cellSize), Math.round(tile * cellSize));
+  ctx.setLineDash([]);
+  ctx.textAlign = 'left';
+  ctx.fillText(GATE_CARDS[experiment.id]?.name || experiment.title, origin.x * cellSize + 6, origin.y * cellSize - 10);
+
+  // Input lanes with direction arrows.
+  for (const lane of markers.lanes) {
+    const active = experiment.inputs?.[lane.id];
+    ctx.globalAlpha = active ? 1 : 0.45;
+    if (lane.direction === 'east') {
+      const py = Math.round(lane.y * cellSize) + 0.5;
+      const endX = origin.x * cellSize;
+      ctx.beginPath();
+      ctx.moveTo(0, py);
+      ctx.lineTo(endX - 4, py);
+      ctx.stroke();
+      drawArrowHead(endX, py, 0);
+      ctx.textAlign = 'right';
+      ctx.fillText(`${lane.label} →`, endX - 10, py - 10);
+    } else {
+      const px = Math.round(lane.x * cellSize) + 0.5;
+      const startY = state.board.height * cellSize;
+      const endY = (origin.y + tile) * cellSize;
+      ctx.beginPath();
+      ctx.moveTo(px, startY);
+      ctx.lineTo(px, endY + 4);
+      ctx.stroke();
+      drawArrowHead(px, endY, -Math.PI / 2);
+      ctx.textAlign = 'left';
+      ctx.fillText(`${lane.label} ↑`, px + 8, endY + 14);
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // Output probe boxes.
+  for (const port of experiment.outputs) {
+    const output = state.circuitOutputs?.find((candidate) => candidate.id === port.id);
+    const lampState = getLampState(output);
+    const x = (port.x - Math.floor(port.width / 2)) * cellSize;
+    const y = (port.y - Math.floor(port.height / 2)) * cellSize;
+    const w = port.width * cellSize;
+    const h = port.height * cellSize;
+    ctx.strokeStyle = lampState === 'high' ? palette.good : palette.accent;
+    ctx.fillStyle = rgbaFromHex(lampState === 'high' ? palette.good : palette.accent, lampState === 'high' ? 0.22 : 0.08);
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(w), Math.round(h));
+    ctx.fillStyle = lampState === 'high' ? palette.good : palette.accent;
+    ctx.textAlign = 'center';
+    ctx.fillText(`${port.label}${lampState === 'high' ? ' · HIGH' : lampState === 'low' ? ' · LOW' : ''}`, x + w / 2, y + h + 12);
+  }
+  ctx.restore();
+}
+
+function drawArrowHead(x, y, angle) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(-7, -4);
+  ctx.lineTo(-7, 4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function updateStats() {
+  const population = getPopulation(state.board);
+  elements.generation.textContent = state.board.generation.toLocaleString();
+  elements.population.textContent = population.toLocaleString();
+  elements.statusMobile.textContent = formatStatus(state.board.generation, population, { compact: true });
+}
+
+function updatePlayButton() {
+  elements.playLabel.textContent = state.playing ? 'Pause' : 'Play';
+  elements.playToggle.setAttribute('aria-label', state.playing ? 'Pause (Space)' : 'Play (Space)');
+  elements.body.dataset.playing = String(state.playing);
+  updateHistoryControls();
+}
+
+/* ---------------------------------------------------------------------------
+ * Tool strip
+ * ------------------------------------------------------------------------- */
+
+function setTool(tool) {
+  state.tool = tool;
+  elements.body.dataset.tool = tool;
+  for (const button of elements.toolButtons) {
+    button.setAttribute('aria-checked', String(button.dataset.tool === tool));
+  }
+  renderToolStrip();
+}
+
+function chooseTool(tool) {
+  if (tool === 'stamp' && !state.selectedPreset) {
+    setTool('stamp');
+    showToast('Pick a pattern to stamp', { kind: 'info' });
+    if (MOBILE_QUERY.matches) openRail(true);
+    return;
+  }
+  setTool(tool);
+}
+
+function renderToolStrip() {
+  const group = getContextualGroup({ tool: state.tool, hasSelection: Boolean(state.selection) });
+  elements.selectionGroup.hidden = group !== 'selection';
+  elements.stampGroup.hidden = group !== 'stamp';
+  if (group === 'stamp') {
+    const name = state.selectedPreset?.name || 'Pick a pattern';
+    const degrees = state.stampRotation ? ` · ${state.stampRotation}°` : '';
+    elements.stampName.textContent = `Stamping: ${name}${degrees}`;
+    elements.stampFlip.setAttribute('aria-pressed', String(state.stampFlipX));
+    elements.stampRotateLeft.disabled = !state.selectedPreset;
+    elements.stampRotateRight.disabled = !state.selectedPreset;
+    elements.stampFlip.disabled = !state.selectedPreset;
+  }
+  const pasteButton = elements.selectionGroup.querySelector('[data-selection-command="paste"]');
+  if (pasteButton) pasteButton.disabled = !state.clipboard;
+}
+
+/* ---------------------------------------------------------------------------
+ * Mode and routing
+ * ------------------------------------------------------------------------- */
+
+function setMode(mode) {
+  const previousMode = state.mode;
+  state.mode = mode;
+  elements.body.dataset.mode = mode;
+  closeMenus();
+  closeSheets();
+
+  if (previousMode !== mode) {
+    const nextTool = getToolAfterWorkspaceChange({ currentTool: state.tool });
+    if (nextTool !== state.tool) {
+      state.hoverCell = null;
+      state.pointer.active = false;
+      setTool(nextTool);
+    }
+  }
+
+  for (const [button, active] of [
+    [elements.modePlayground, mode === 'playground'],
+    [elements.modeStudio, mode === 'studio'],
+    [elements.modeCommunity, mode === 'community'],
+  ]) {
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+
+  elements.communityPanel.hidden = mode !== 'community';
+  if (mode === 'community' && state.playing) setPlaying(false);
+  if (mode === 'community') renderCommunity();
+  if (mode === 'studio' && !state.session && state.studioView === 'project') {
+    const activeId = communityState.activeCreationId;
+    if (!(activeId && openProject(activeId))) startProject({ title: 'Untitled project' });
+  }
+  renderStudio();
+  renderRail();
+  document.title = mode === 'studio' ? 'Studio · Life Lab' : mode === 'community' ? 'Community · Life Lab' : 'Life Lab';
+  window.requestAnimationFrame(resizeCanvas);
+}
+
+function navigateTo(path, { replace = false, render = true } = {}) {
+  const method = replace ? 'replaceState' : 'pushState';
+  if (window.location.pathname + window.location.search !== path) window.history[method]({}, '', path);
+  if (render) routeCurrentLocation();
+}
+
+async function routeCurrentLocation() {
+  const path = window.location.pathname;
+  const creationMatch = path.match(/^\/c\/([^/]+)$/);
+  if (creationMatch) { await openPublicCreationRoute(decodeURIComponent(creationMatch[1])); return; }
+  const profileMatch = path.match(/^\/u\/([^/]+)$/);
+  if (profileMatch) { await openCreatorRoute(decodeURIComponent(profileMatch[1]), { updateHistory: false }); return; }
+  const mode = getModeForPath(path);
+  if (mode === 'community') {
+    state.communityView = 'gallery';
+    state.publicProfile = null;
+  }
+  setMode(mode);
+}
+
+/* ---------------------------------------------------------------------------
+ * Community
+ * ------------------------------------------------------------------------- */
 
 function getFamousCommunityDesigns() {
   const famous = [
-    {
-      id: 'glider',
-      title: 'Glider',
-      description: 'The smallest spaceship and the hello-world of Life motion.',
-      tags: ['spaceship', 'starter', 'famous'],
-    },
-    {
-      id: 'gosper-gun',
-      title: 'Gosper glider gun',
-      description: 'The first known gun: a repeating source that emits gliders.',
-      tags: ['gun', 'glider', 'classic'],
-    },
-    {
-      id: 'pulsar',
-      title: 'Pulsar',
-      description: 'A symmetric period-3 oscillator with a readable rhythm.',
-      tags: ['oscillator', 'period-3', 'starter'],
-    },
-    {
-      id: 'r-pentomino',
-      title: 'R-pentomino',
-      description: 'A tiny methuselah that stays chaotic for a surprisingly long time.',
-      tags: ['methuselah', 'chaos', 'famous'],
-    },
-    {
-      id: 'acorn',
-      title: 'Acorn',
-      description: 'Seven cells that create a long-lived, expansive sequence.',
-      tags: ['methuselah', 'growth', 'classic'],
-    },
-    {
-      id: 'diehard',
-      title: 'Diehard',
-      description: 'A finite pattern famous for living a long time before disappearing.',
-      tags: ['methuselah', 'extinction', 'classic'],
-    },
+    { id: 'glider', title: 'Glider', description: 'The smallest spaceship and the hello-world of Life motion.', tags: ['spaceship', 'starter', 'famous'] },
+    { id: 'gosper-gun', title: 'Gosper glider gun', description: 'The first known gun: a repeating source that emits gliders.', tags: ['gun', 'glider', 'classic'] },
+    { id: 'pulsar', title: 'Pulsar', description: 'A symmetric period-3 oscillator with a readable rhythm.', tags: ['oscillator', 'period-3', 'starter'] },
+    { id: 'r-pentomino', title: 'R-pentomino', description: 'A tiny methuselah that stays chaotic for a surprisingly long time.', tags: ['methuselah', 'chaos', 'famous'] },
+    { id: 'acorn', title: 'Acorn', description: 'Seven cells that create a long-lived, expansive sequence.', tags: ['methuselah', 'growth', 'classic'] },
+    { id: 'diehard', title: 'Diehard', description: 'A finite pattern famous for living a long time before disappearing.', tags: ['methuselah', 'extinction', 'classic'] },
   ];
 
   return famous.map((entry) => {
     const preset = findPreset(entry.id);
     const bounds = getPatternBounds(preset.coordinates);
+    const width = Math.max(80, bounds.width + 24);
+    const height = Math.max(60, bounds.height + 24);
 
     return {
       id: `famous-${entry.id}`,
@@ -3295,7 +2481,7 @@ function getFamousCommunityDesigns() {
       starCount: 0,
       cloneCount: 0,
       viewCount: 0,
-      commentCount: getCommunityComments({ id: `famous-${entry.id}` }).length,
+      commentCount: 0,
       comments: [],
       starredBy: [],
       remixedFromId: null,
@@ -3303,17 +2489,12 @@ function getFamousCommunityDesigns() {
       currentVersion: {
         id: `famous-version-${entry.id}`,
         rle: encodeRle(preset.coordinates),
-        width: Math.max(80, bounds.width + 24),
-        height: Math.max(60, bounds.height + 24),
+        width,
+        height,
         generation: 0,
         population: preset.coordinates.length,
         rule: 'B3/S23',
-        settings: serializeDesignSettings(createDesignSettings({
-          gridPreset: 'custom',
-          width: Math.max(80, bounds.width + 24),
-          height: Math.max(60, bounds.height + 24),
-          renderStyle: entry.id === 'pulsar' ? 'rounded' : 'glow',
-        })),
+        settings: serializeDesignSettings(createDesignSettings({ gridPreset: 'custom', width, height })),
         createdAt: '2026-06-30T00:00:00.000Z',
       },
       createdAt: '2026-06-30T00:00:00.000Z',
@@ -3335,54 +2516,271 @@ function getCommunityComments(creation) {
   return state.communityComments[creation.id] || creation.comments || [];
 }
 
-function renderCommunityDetail(creation) {
-  if (!elements.communityDetail) return;
-  const isPreset = creation?.id.startsWith('famous-');
-  elements.commentBox.hidden = !creation || isPreset;
+function isFamous(creation) {
+  return String(creation?.id || '').startsWith('famous-');
+}
 
-  if (!creation) {
-    elements.communityDetail.innerHTML = '<p class="community-empty">Select a design to inspect, copy, comment, or remix.</p>';
+async function renderCommunity() {
+  const renderEpoch = (state.communityRenderEpoch || 0) + 1;
+  state.communityRenderEpoch = renderEpoch;
+  renderCommunityAuth();
+  if (state.mode !== 'community') return;
+  syncCommunityFilterUi();
+
+  const ownPublic = communityState.creations.filter((creation) => creation.visibility === 'public' && !creation.archivedAt);
+  let trending = await community.listTrendingCreations();
+  if (state.communityRenderEpoch !== renderEpoch) return;
+  if (communityAuth.cloudRepo?.listPublicCreations) {
+    state.communityLoadStatus = 'loading';
+    try {
+      const feed = await communityAuth.cloudRepo.listPublicCreations({ q: state.communitySearch, favorites: '', limit: '48' });
+      if (state.communityRenderEpoch !== renderEpoch) return;
+      state.publicCreations = feed.creations || [];
+      trending = state.publicCreations;
+      state.communityLoadStatus = 'ready';
+      elements.communityStatus.hidden = true;
+    } catch (error) {
+      state.communityLoadStatus = error.status === 401 ? 'auth-required' : 'unavailable';
+      elements.communityStatus.hidden = false;
+      elements.communityStatus.textContent = `Community service unavailable: ${getErrorMessage(error)} Library patterns and local projects are still here.`;
+    }
+  }
+  state.trendingCreations = trending;
+  const famous = getFamousCommunityDesigns();
+  const newest = [...state.publicCreations, ...ownPublic]
+    .filter((creation, index, all) => all.findIndex((item) => item.id === creation.id) === index)
+    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+
+  let items;
+  if (state.publicProfile) items = state.publicProfile.creations || [];
+  else if (state.communityFilter === 'famous') items = famous;
+  else if (state.communityFilter === 'trending') items = trending;
+  else if (state.communityFilter === 'new') items = newest;
+  else items = [...newest, ...famous];
+
+  renderCommunityGrid(filterCommunityItems(items));
+  elements.communityGallery.hidden = state.communityView !== 'gallery';
+  elements.communityDetail.hidden = state.communityView !== 'detail';
+  if (state.communityView === 'detail') renderCommunityDetail(findCommunityDesign(state.selectedCommunityId));
+}
+
+function filterCommunityItems(creations) {
+  const query = state.communitySearch.trim().toLowerCase();
+  if (!query) return creations;
+  return creations.filter((creation) => [
+    creation.title,
+    creation.ownerName,
+    creation.description,
+    ...(creation.tags || []),
+  ].some((value) => String(value || '').toLowerCase().includes(query)));
+}
+
+function renderCommunityGrid(creations) {
+  elements.communityGrid.innerHTML = '';
+  if (state.publicProfile) {
+    const heading = document.createElement('p');
+    heading.className = 'community-status';
+    heading.style.gridColumn = '1 / -1';
+    heading.innerHTML = `<button class="button button-quiet" type="button" data-community-action="browse">← All patterns</button> ${escapeHtml(state.publicProfile.displayName)} · ${creations.length} public ${creations.length === 1 ? 'pattern' : 'patterns'}`;
+    elements.communityGrid.append(heading);
+  }
+  if (creations.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'community-empty';
+    empty.textContent = state.communitySearch.trim()
+      ? 'No patterns match that search.'
+      : state.communityFilter === 'trending'
+        ? 'Nothing is trending yet. Publish a project to start the list.'
+        : state.communityFilter === 'new'
+          ? 'No published projects yet.'
+          : 'Nothing here yet.';
+    elements.communityGrid.append(empty);
     return;
   }
+  for (const creation of creations) {
+    const card = document.createElement('article');
+    card.className = 'community-card';
+    card.dataset.creationId = creation.id;
+    card.setAttribute('role', 'listitem');
+    card.innerHTML = `
+      ${getCommunityPreviewHtml(creation)}
+      <div class="community-card-text">
+        <strong>${escapeHtml(creation.title)}</strong>
+        <span>${isFamous(creation) ? 'Library · LifeWiki' : `by ${escapeHtml(creation.ownerName)}`} · ${Number(creation.currentVersion?.population || 0).toLocaleString()} cells</span>
+      </div>
+      <button class="button" type="button" data-community-action="open" data-creation-id="${escapeHtml(creation.id)}">Open</button>
+    `;
+    elements.communityGrid.append(card);
+  }
+}
 
+function getCommunityPreviewHtml(creation) {
+  try {
+    const preview = creation.previewConfig?.version === 1
+      ? creation.previewConfig
+      : createCreationPreviewConfig(creation);
+    return getPreviewGridHtml(preview);
+  } catch {
+    return '<span class="preview-grid preview-grid-empty" aria-hidden="true"></span>';
+  }
+}
+
+function getPreviewGridHtml(preview) {
+  // Small patterns are padded onto a 16 x 12 field so a glider reads as a
+  // pattern on a board rather than three giant blocks.
+  const sourceColumns = Number(preview?.grid?.columns || 6);
+  const sourceRows = Number(preview?.grid?.rows || 5);
+  const columns = Math.max(16, sourceColumns);
+  const rows = Math.max(12, sourceRows);
+  const offsetX = Math.floor((columns - sourceColumns) / 2);
+  const offsetY = Math.floor((rows - sourceRows) / 2);
+  return `
+    <span class="preview-grid" aria-hidden="true" style="--preview-cols:${columns};--preview-rows:${rows}">
+      ${(preview?.cells || []).map(([x, y]) => `<span style="grid-column:${x + offsetX + 1};grid-row:${y + offsetY + 1}"></span>`).join('')}
+    </span>
+  `;
+}
+
+function getCreationPreviewAltText(creation) {
+  try {
+    return (creation.previewConfig?.version === 1
+      ? creation.previewConfig
+      : createCreationPreviewConfig(creation)).altText;
+  } catch {
+    return `Preview of ${creation.title}`;
+  }
+}
+
+function openCommunityDetail(creationId) {
+  const creation = findCommunityDesign(creationId);
+  if (!creation) return;
+  state.selectedCommunityId = creation.id;
+  state.communityView = 'detail';
+  elements.communityGallery.hidden = true;
+  elements.communityDetail.hidden = false;
+  renderCommunityDetail(creation);
+  if (creation.visibility === 'public' && creation.slug) navigateTo(`/c/${encodeURIComponent(creation.slug)}`, { render: false });
+  elements.communityPanel.scrollTop = 0;
+}
+
+function renderCommunityDetail(creation) {
+  if (!creation) {
+    elements.communityDetail.innerHTML = '<div class="detail-state"><h1>Pattern unavailable</h1><p>It may be private or removed.</p><button class="button" type="button" data-community-action="browse">Back to Community</button></div>';
+    return;
+  }
+  const famous = isFamous(creation);
   const comments = getCommunityComments(creation);
-  const actionCopy = getCommunityActionCopy();
-  const lineage = creation.remixedFromId
-    ? `Based on ${creation.remixedFromId}`
-    : 'Original or historical design';
+  const starred = creation.starredByViewer
+    ?? creation.starredBy?.includes(communityState.profile?.id || 'profile-local')
+    ?? false;
+  const canStar = !famous || communityAuth.cloudConfigured;
+  const canReport = !famous && communityAuth.cloudConfigured;
+  const author = creation.ownerUsername
+    ? `<button type="button" data-community-action="creator" data-username="${escapeHtml(creation.ownerUsername)}">${escapeHtml(creation.ownerName)}</button>`
+    : escapeHtml(creation.ownerName);
 
   elements.communityDetail.innerHTML = `
-    <div class="detail-preview" role="img" aria-label="${escapeHtml(getCreationPreviewAltText(creation))}">${getCommunityPreviewHtml(creation)}</div>
-    <div class="section-heading">
-      <h2>${escapeHtml(creation.title)}</h2>
-      <span>${creation.id.startsWith('famous-') ? 'Library preset' : `${creation.starCount || 0} stars`}</span>
+    <div class="detail-top">
+      <button class="button button-quiet" type="button" id="community-back" data-community-action="browse">
+        <svg class="icon" aria-hidden="true"><use href="#i-back" /></svg><span>Community</span>
+      </button>
     </div>
-    <p>${escapeHtml(creation.description || 'No description yet.')}</p>
-    <div class="community-tags">${(creation.tags || []).map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>
-    <dl class="detail-stats">
-      <div><dt>${isPreset ? 'Source' : 'Author'}</dt><dd>${creation.ownerUsername ? `<button class="creator-link" type="button" data-community-action="creator" data-username="${escapeHtml(creation.ownerUsername)}">${escapeHtml(creation.ownerName)}</button>` : escapeHtml(creation.ownerName)}</dd></div>
-      <div><dt>Grid</dt><dd>${creation.currentVersion?.width || 0} x ${creation.currentVersion?.height || 0}</dd></div>
-      <div><dt>Cells</dt><dd>${creation.currentVersion?.population || 0}</dd></div>
-      <div><dt>Lineage</dt><dd>${escapeHtml(lineage)}</dd></div>
-    </dl>
-    <div class="community-actions detail-actions">
-      <button type="button" data-community-action="play-copy" data-creation-id="${creation.id}">${actionCopy.play}</button>
-      <button type="button" data-community-action="copy" data-creation-id="${creation.id}">${actionCopy.share}</button>
-      <button type="button" data-community-action="remix" data-creation-id="${creation.id}">Remix</button>
-      ${creation.id.startsWith('famous-') ? '' : `<button type="button" data-community-action="report" data-creation-id="${creation.id}">Report</button>`}
+    <div class="detail-layout">
+      <div class="detail-preview" id="detail-preview" role="img" aria-label="${escapeHtml(getCreationPreviewAltText(creation))}">${getCommunityPreviewHtml(creation)}</div>
+      <div class="detail-body">
+        <h1 id="detail-title">${escapeHtml(creation.title)}</h1>
+        <p class="detail-author" id="detail-author">${famous ? 'From the LifeWiki library' : `by ${author}`}</p>
+        <p class="detail-description" id="detail-description">${escapeHtml(creation.description || 'No description yet.')}</p>
+        <div class="detail-tags" id="detail-tags">${(creation.tags || []).map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>
+        <div class="detail-meta">
+          <span>${Number(creation.currentVersion?.population || 0).toLocaleString()} cells</span>
+          <span>${creation.currentVersion?.width || 0} × ${creation.currentVersion?.height || 0}</span>
+          ${famous ? '' : `<span>${creation.starCount || 0} stars</span><span>${creation.cloneCount || 0} remixes</span>`}
+        </div>
+        <div class="detail-actions">
+          <button class="button button-primary" type="button" data-community-action="play" data-creation-id="${escapeHtml(creation.id)}">
+            <svg class="icon" aria-hidden="true"><use href="#i-play" /></svg><span>Play</span>
+          </button>
+          <button class="button" type="button" data-community-action="remix" data-creation-id="${escapeHtml(creation.id)}">
+            <svg class="icon" aria-hidden="true"><use href="#i-remix" /></svg><span>Remix</span>
+          </button>
+          ${canStar ? `<button class="button" type="button" data-community-action="star" data-creation-id="${escapeHtml(creation.id)}" aria-pressed="${starred ? 'true' : 'false'}">
+            <svg class="icon" aria-hidden="true"><use href="#i-star" /></svg><span>${starred ? 'Starred' : 'Star'}</span>
+          </button>` : ''}
+          <button class="button" type="button" data-community-action="share" data-creation-id="${escapeHtml(creation.id)}">
+            <svg class="icon" aria-hidden="true"><use href="#i-share" /></svg><span>Share</span>
+          </button>
+          ${canReport ? `<button class="button button-quiet" type="button" data-community-action="report" data-creation-id="${escapeHtml(creation.id)}">Report</button>` : ''}
+        </div>
+      </div>
     </div>
-    ${isPreset ? '<p class="community-empty">Remix this preset to publish your own version and start a discussion.</p>' : `<div class="comments-list">
-      <h3>Comments ${comments.length}</h3>
-      ${comments.length === 0
-    ? '<p class="community-empty">No comments yet.</p>'
-    : comments.map((comment) => `
+    ${famous ? '' : `
+    <section class="comments" aria-label="Comments">
+      <h2>Comments (${comments.length})</h2>
+      <div id="comments-list">
+        ${comments.length === 0 ? '<p class="community-status">No comments yet.</p>' : comments.map((comment) => `
           <article class="comment">
             <strong>${escapeHtml(comment.authorName)}</strong>
             <p>${escapeHtml(comment.body)}</p>
-          </article>
-        `).join('')}
-    </div>`}
+          </article>`).join('')}
+      </div>
+      <div class="comment-form">
+        <textarea id="comment-body" rows="2" placeholder="Add a comment"></textarea>
+        <button id="post-comment" class="button" type="button">Comment</button>
+      </div>
+    </section>`}
   `;
+}
+
+async function openPublicCreationRoute(identifier) {
+  state.communityView = 'detail';
+  state.publicProfile = null;
+  setMode('community');
+  state.communityRenderEpoch = (state.communityRenderEpoch || 0) + 1;
+  elements.communityGallery.hidden = true;
+  elements.communityDetail.hidden = false;
+  elements.communityDetail.innerHTML = '<p class="community-status" role="status">Loading…</p>';
+  try {
+    let creation = findCommunityDesign(identifier);
+    if (!creation && communityAuth.cloudRepo?.getPublicCreation) creation = await communityAuth.cloudRepo.getPublicCreation(identifier);
+    if (!creation || creation.visibility !== 'public') throw Object.assign(new Error('This pattern is unavailable or private.'), { status: 404 });
+    state.publicCreations = [creation, ...state.publicCreations.filter((item) => item.id !== creation.id)];
+    state.selectedCommunityId = creation.id;
+    if (communityAuth.cloudRepo?.listPublicComments && !isFamous(creation)) {
+      const result = await communityAuth.cloudRepo.listPublicComments(creation.slug || creation.id);
+      state.communityComments[creation.id] = result.comments || [];
+    }
+    renderCommunityDetail(creation);
+    document.title = `${creation.title} by ${creation.ownerName} · Life Lab`;
+  } catch (error) {
+    elements.communityDetail.innerHTML = `<div class="detail-state"><h1>Pattern unavailable</h1><p>${escapeHtml(getErrorMessage(error))}</p><button class="button" type="button" data-community-action="browse">Back to Community</button></div>`;
+  }
+}
+
+async function openCreatorRoute(username, { updateHistory = true } = {}) {
+  if (!username) return;
+  if (updateHistory) navigateTo(`/u/${encodeURIComponent(username)}`, { render: false });
+  state.communityView = 'gallery';
+  setMode('community');
+  try {
+    if (!communityAuth.cloudRepo?.getPublicProfile) throw Object.assign(new Error('Creator pages need the hosted Community service.'), { status: 503 });
+    const profile = await communityAuth.cloudRepo.getPublicProfile(username);
+    state.publicProfile = profile;
+    state.publicCreations = [...(profile.creations || []), ...state.publicCreations.filter((item) => !(profile.creations || []).some((creation) => creation.id === item.id))];
+    document.title = `${profile.displayName} · Life Lab`;
+    renderCommunity();
+  } catch (error) {
+    state.publicProfile = null;
+    elements.communityStatus.hidden = false;
+    elements.communityStatus.textContent = getErrorMessage(error);
+    renderCommunity();
+  }
+}
+
+function syncCommunityFilterUi() {
+  for (const button of elements.communityFilters.querySelectorAll('[data-community-filter]')) {
+    button.setAttribute('aria-selected', String(button.dataset.communityFilter === state.communityFilter));
+  }
 }
 
 async function handleCommunityAction(event) {
@@ -3392,17 +2790,15 @@ async function handleCommunityAction(event) {
   const { communityAction, creationId } = button.dataset;
 
   if (communityAction === 'browse') {
-    document.title = "Conway's Game Explorer";
+    document.title = 'Community · Life Lab';
+    state.communityView = 'gallery';
+    state.publicProfile = null;
     navigateTo('/community');
     return;
   }
 
-  if (communityAction === 'detail') {
-    state.selectedCommunityId = creationId;
-    renderCommunityDetail(findCommunityDesign(creationId));
-    syncCommunitySelection();
-    const creation = findCommunityDesign(creationId);
-    if (creation?.visibility === 'public' && creation.slug) navigateTo(`/c/${encodeURIComponent(creation.slug)}`, { render: false });
+  if (communityAction === 'open') {
+    openCommunityDetail(creationId);
     return;
   }
 
@@ -3411,39 +2807,8 @@ async function handleCommunityAction(event) {
     return;
   }
 
-  if (communityAction === 'play-copy') {
+  if (communityAction === 'play') {
     playCommunityDesign(creationId);
-    return;
-  }
-
-  if (communityAction === 'edit-copy') {
-    await remixCommunityDesign(creationId);
-    return;
-  }
-
-  if (communityAction === 'star') {
-    if (creationId.startsWith('famous-')) {
-      if (requiresCloudSignInForSharedAction()) {
-        queueAccountAction('favorite-pattern', { patternId: creationId.slice(7) }, 'Sign in to save this preset to Favorites.');
-      } else if (isCloudCommunityActive()) {
-        const patternId = creationId.slice(7);
-        await community.setPatternFavorite(patternId, true);
-        state.patternFavorites = [...new Set([...state.patternFavorites, patternId])];
-        showToast('Preset saved to Favorites', { kind: 'success' });
-      } else {
-        showToast('Favorite needs a configured account', { kind: 'warning' });
-        elements.communityOutput.textContent = 'Favorites sync is unavailable in this local build. You can still play or remix this preset.';
-      }
-      return;
-    }
-    await starCommunityCreation(creationId);
-    state.selectedCommunityId = creationId;
-    renderCommunityDetail(findCommunityDesign(creationId));
-    return;
-  }
-
-  if (communityAction === 'copy') {
-    await copyCommunityDesign(creationId);
     return;
   }
 
@@ -3451,18 +2816,35 @@ async function handleCommunityAction(event) {
     await remixCommunityDesign(creationId);
     return;
   }
+
+  if (communityAction === 'star') {
+    if (String(creationId).startsWith('famous-')) {
+      if (requiresCloudSignInForSharedAction()) {
+        queueAccountAction('favorite-pattern', { patternId: creationId.slice(7) }, 'Sign in to star library patterns.');
+      } else if (isCloudCommunityActive()) {
+        const patternId = creationId.slice(7);
+        await community.setPatternFavorite(patternId, true);
+        state.patternFavorites = [...new Set([...state.patternFavorites, patternId])];
+        showToast('Starred', { kind: 'success' });
+      }
+      return;
+    }
+    await starCommunityCreation(creationId);
+    renderCommunityDetail(findCommunityDesign(creationId));
+    return;
+  }
+
+  if (communityAction === 'share') {
+    await copyCommunityDesign(creationId);
+    return;
+  }
+
   if (communityAction === 'report') {
-    if (requiresCloudSignInForSharedAction()) { queueAccountAction('report', { creationId }, 'Sign in to report this creation.'); return; }
+    if (requiresCloudSignInForSharedAction()) { queueAccountAction('report', { creationId }, 'Sign in to report this pattern.'); return; }
     const reason = window.prompt('Describe the issue (5–2000 characters):');
     if (!reason) return;
     try { await community.reportCreation(creationId, reason); showToast('Report received', { kind: 'success' }); }
-    catch (error) { elements.communityOutput.textContent = `Could not report: ${getErrorMessage(error)}`; }
-  }
-}
-
-function syncCommunitySelection() {
-  for (const card of document.querySelectorAll('.community-card[data-creation-id]')) {
-    card.classList.toggle('active', card.dataset.creationId === state.selectedCommunityId);
+    catch (error) { showToast(`Could not report: ${getErrorMessage(error)}`, { kind: 'error' }); }
   }
 }
 
@@ -3471,101 +2853,45 @@ function playCommunityDesign(creationId) {
   if (!source) return;
 
   try {
-    loadCreationOntoBoard(source, { center: true });
+    state.session = null;
+    loadCreationOntoBoard(source);
     state.selectedCommunityId = creationId;
-    state.devProjectActive = false;
-    state.activeDesignSession = {
-      kind: 'playing',
-      sourceTitle: source.title,
-      sourceOwnerName: source.ownerName,
-      title: source.title,
-    };
-    state.playing = true;
-    updatePlayButton();
-    setMode('playground');
-    elements.communityOutput.textContent = `Playing ${source.ownerName}'s design: ${source.title}.`;
-    elements.activeNote.textContent = getActiveDesignStatusText();
+    navigateTo('/');
+    fitLiveCells();
+    setPlaying(true);
     showToast(`Playing ${source.title}`, { kind: 'success' });
   } catch (error) {
-    elements.communityOutput.textContent = `Could not play design: ${getErrorMessage(error)}`;
+    showToast(`Could not play: ${getErrorMessage(error)}`, { kind: 'error' });
   }
 }
 
-async function editCommunityClone(creationId) {
-  const source = findCommunityDesign(creationId);
-  if (!source) return;
-
-  if (!communityState.profile) {
-    elements.communityOutput.textContent = 'Create a profile before editing a clone into your portfolio.';
-    showToast('Create a profile first', { kind: 'warning' });
-    setMode('dev');
+async function starCommunityCreation(creationId, { resumed = false } = {}) {
+  if (communityAuth.cloudConfigured && requiresCloudSignInForSharedAction()) {
+    if (!resumed) queueAccountAction('favorite-creation', { creationId }, 'Sign in to star this pattern.');
     return;
   }
 
+  const profileId = communityState.profile?.id || 'profile-local';
+  let nextCreation;
   try {
-    const copy = await createEditableCommunityCopy(source, creationId);
-    loadCreationOntoBoard(copy, { center: true });
-    state.selectedCommunityId = creationId;
-    startDevProject('design', {
-      title: copy.title,
-      creationId: community.findCreation(copy.id) ? copy.id : null,
-      source,
-      boardLoaded: true,
-      openTools: true,
-    });
-    setDesignMetadataFields(copy);
-    elements.communityOutput.textContent = communityState.profile
-      ? `Created ${copy.title} in your portfolio.`
-      : `Opened a guest copy of ${source.title}. Create a profile to save it.`;
-    elements.devOutput.textContent = `Editing ${copy.title}. ${getDesignSettingSummary(getCurrentDesignSettings())}.`;
-    showToast('Edit clone ready', { kind: 'success' });
+    nextCreation = await community.toggleStar(creationId, profileId);
+    if (!nextCreation) return;
   } catch (error) {
-    elements.communityOutput.textContent = `Could not open a copy: ${getErrorMessage(error)}`;
-  }
-}
-
-async function createEditableCommunityCopy(source, sourceId) {
-  if (!communityState.profile) {
-    return createGuestCommunityCopy(source);
+    showToast(`Could not update star: ${getErrorMessage(error)}`, { kind: 'error' });
+    return;
   }
 
-  if (!sourceId.startsWith('famous-') && community.findCreation(sourceId)) {
-    const remix = await community.cloneCreation(sourceId, communityState.profile);
-    syncCommunity();
-    return remix;
-  }
-
-  const copy = await community.saveCreation(toCommunityCopyInput(source));
   syncCommunity();
-  return copy;
-}
-
-function createGuestCommunityCopy(source) {
-  return {
-    ...source,
-    id: `guest-copy-${source.id}`,
-    title: `${source.title} Copy`,
-    slug: `guest-copy-${source.slug || source.id}`,
-    visibility: 'private',
-    ownerId: 'profile-local',
-    ownerName: 'Guest Builder',
-    starCount: 0,
-    cloneCount: 0,
-    starredBy: [],
-    remixedFromId: source.id,
-    rootCreationId: source.rootCreationId || source.id,
-    currentVersion: {
-      ...source.currentVersion,
-      id: `guest-version-${source.currentVersion?.id || source.id}`,
-    },
-  };
+  const starred = nextCreation.starredByViewer
+    ?? nextCreation.starredBy?.includes(profileId)
+    ?? false;
+  showToast(starred ? 'Starred' : 'Star removed', { kind: 'success' });
+  return nextCreation;
 }
 
 function toCommunityCopyInput(source) {
-  const title = createRemixTitle({ sourceTitle: source.title, profile: communityState.profile });
-
   return {
-    title,
+    title: createRemixTitle({ sourceTitle: source.title, profile: communityState.profile }),
     description: source.description,
     tags: source.tags,
     rle: source.currentVersion?.rle,
@@ -3588,18 +2914,23 @@ async function copyCommunityDesign(creationId) {
   try {
     await navigator.clipboard.writeText(link);
     triggerHaptic('copy');
-    showToast('Design copied', { kind: 'success' });
-    elements.communityOutput.textContent = `Copied ${creation.title}.`;
+    showToast('Link copied', { kind: 'success' });
   } catch {
-    elements.rleField.value = link;
-    showToast('Copied into RLE box', { kind: 'warning' });
-    elements.communityOutput.textContent = 'Clipboard was unavailable, so the design link is in the RLE box.';
+    window.prompt('Copy this link:', link);
   }
 }
 
 async function remixCommunityDesign(creationId) {
   const creation = findCommunityDesign(creationId);
   if (!creation) return;
+
+  const openRemix = (remix) => {
+    loadCreationOntoBoard(remix);
+    startProject({ title: remix.title, creationId: remix.id, source: creation, boardLoaded: true });
+    setProjectFields(remix);
+    navigateTo('/studio');
+    showToast('Remix ready in Studio', { kind: 'success' });
+  };
 
   if (!communityState.profile) {
     try {
@@ -3611,78 +2942,64 @@ async function remixCommunityDesign(creationId) {
       });
       community = localCommunity;
       communityState = localCommunity.getState();
-      loadCreationOntoBoard(remix, { center: true });
-      startDevProject('design', { title: remix.title, creationId: remix.id, source: creation, boardLoaded: true, openTools: true });
-      setDesignMetadataFields(remix);
-      navigateTo('/studio');
-      elements.devOutput.textContent = `Private guest remix of ${creation.title}. Sign in only when you want to publish.`;
-      showToast('Guest remix ready', { kind: 'success' });
+      openRemix(remix);
     } catch (error) {
-      elements.communityOutput.textContent = `Could not remix design: ${getErrorMessage(error)}`;
+      showToast(`Could not remix: ${getErrorMessage(error)}`, { kind: 'error' });
     }
     return;
   }
 
-  if (creationId.startsWith('famous-')) {
+  if (isFamous(creation)) {
     try {
-      const remix = await community.saveCreation({
-        title: createRemixTitle({ sourceTitle: creation.title, profile: communityState.profile }),
-        description: creation.description,
-        tags: creation.tags,
-        rle: creation.currentVersion.rle,
-        width: creation.currentVersion.width,
-        height: creation.currentVersion.height,
-        generation: creation.currentVersion.generation,
-        population: creation.currentVersion.population,
-        thumbnail: creation.thumbnail,
-        settings: creation.currentVersion.settings,
-      });
+      const remix = await community.saveCreation(toCommunityCopyInput(creation));
       syncCommunity();
-      loadCreationOntoBoard(remix, { center: true });
-      navigateTo('/studio');
-      elements.communityOutput.textContent = `Created a private remix of ${creation.title}.`;
-      showToast('Remix draft created', { kind: 'success' });
+      openRemix(remix);
     } catch (error) {
-      elements.communityOutput.textContent = `Could not remix design: ${getErrorMessage(error)}`;
+      showToast(`Could not remix: ${getErrorMessage(error)}`, { kind: 'error' });
     }
     return;
   }
 
-  await cloneCommunityCreation(creationId);
-  const remix = community.findCreation(community.getState().activeCreationId);
-  if (remix) {
-    loadCreationOntoBoard(remix, { center: true });
-    navigateTo('/studio');
-    showToast('Remix draft created', { kind: 'success' });
+  if (requiresCloudSignInForSharedAction()) {
+    openAccountDialog({ context: 'Sign in to remix shared patterns.' });
+    return;
+  }
+  try {
+    const remix = await community.cloneCreation(creationId, communityState.profile);
+    if (!remix) return;
+    syncCommunity();
+    openRemix(remix);
+  } catch (error) {
+    showToast(`Could not remix: ${getErrorMessage(error)}`, { kind: 'error' });
   }
 }
 
 async function postCommunityComment({ body: resumedBody, creationId: resumedCreationId, resumed = false } = {}) {
   const creation = findCommunityDesign(resumedCreationId || state.selectedCommunityId);
   if (!creation) {
-    showToast('Select a design first', { kind: 'warning' });
+    showToast('Open a pattern first', { kind: 'info' });
     return;
   }
 
-  const body = resumedBody ?? elements.commentBody.value;
+  const field = $('#comment-body');
+  const body = resumedBody ?? field?.value ?? '';
   if (!String(body).trim()) {
-    showToast('Write a comment first', { kind: 'warning' });
+    showToast('Write a comment first', { kind: 'info' });
     return;
   }
-  if (requiresCloudSignInForSharedAction()) {
-    if (!resumed) queueAccountAction('comment', { creationId: creation.id, body }, 'Sign in to post this comment. The text will be submitted once.');
+  if (communityAuth.cloudConfigured && requiresCloudSignInForSharedAction()) {
+    if (!resumed) queueAccountAction('comment', { creationId: creation.id, body }, 'Sign in to post this comment. It will be submitted once.');
     return;
   }
-  if (isCloudCommunityActive() && !creation.id.startsWith('famous-')) {
+  if (isCloudCommunityActive() && !isFamous(creation)) {
     try {
       const comment = await community.createComment(creation.id, body);
       state.communityComments[creation.id] = [comment, ...getCommunityComments(creation)];
-      elements.commentBody.value = '';
       renderCommunityDetail(creation);
       showToast('Comment added', { kind: 'success' });
       return comment;
     } catch (error) {
-      elements.communityOutput.textContent = `Could not comment: ${getErrorMessage(error)}`;
+      showToast(`Could not comment: ${getErrorMessage(error)}`, { kind: 'error' });
       throw error;
     }
   }
@@ -3696,7 +3013,6 @@ async function postCommunityComment({ body: resumedBody, creationId: resumedCrea
   });
 
   state.communityComments[creation.id] = commented.comments;
-  elements.commentBody.value = '';
   renderCommunityDetail({
     ...creation,
     comments: commented.comments,
@@ -3706,24 +3022,17 @@ async function postCommunityComment({ body: resumedBody, creationId: resumedCrea
   return commented.comments.at(-1);
 }
 
-function getActiveCreation() {
-  return community.findCreation(communityState.activeCreationId);
-}
-
 function syncCommunity() {
   communityState = community.getState();
   renderCommunity();
-}
-
-function getSuggestedCreationTitle() {
-  return `Life build ${communityState.creations.length + 1}`;
+  if (state.mode === 'studio') renderStudio();
 }
 
 function getCurrentCreationPreviewConfig() {
   const coordinates = getLiveCoordinates();
   if (!coordinates.length) return {};
   return createCreationPreviewConfig({
-    title: elements.devDesignTitle?.value || elements.creationTitle?.value || getSuggestedCreationTitle(),
+    title: elements.projectTitle.value || 'Untitled project',
     previewConfig: state.previewConfig,
     currentVersion: {
       rle: encodeRle(coordinates),
@@ -3732,82 +3041,296 @@ function getCurrentCreationPreviewConfig() {
   });
 }
 
-function getCreationPreviewAltText(creation) {
+function importSharedBuildFromHash() {
+  const shared = decodeShareLink(window.location.hash);
+  if (!shared) return;
+
   try {
-    return (creation.previewConfig?.version === 1
-      ? creation.previewConfig
-      : createCreationPreviewConfig(creation)).altText;
+    const pattern = parseRle(shared.rle);
+    state.board = clearBoard(state.board);
+    state.board = placePattern(state.board, pattern.coordinates, 0, 0);
+    state.authoredStart = ownedSnapshot();
+    loadSimulation();
+    fitLiveCells();
+    updateStats();
+    startProject({ title: shared.title || 'Shared pattern', boardLoaded: true });
+    setProjectFields({ title: shared.title, description: shared.description, tags: shared.tags });
+    markDesignDirty(true);
+    navigateTo('/studio', { replace: true });
+    showToast(shared.ownerName ? `Opened a pattern shared by ${shared.ownerName}` : 'Opened a shared pattern', { kind: 'success' });
   } catch {
-    return `Preview of ${creation.title}`;
+    showToast('That share link could not be opened', { kind: 'error' });
   }
 }
 
-function getPreviewGridHtml(preview) {
-  const columns = Number(preview?.grid?.columns || 6);
-  const rows = Number(preview?.grid?.rows || 5);
-  const background = preview?.colors?.background || '#07090f';
-  const live = preview?.colors?.live || '#5eead4';
-  return `
-    <span class="preview-grid" aria-hidden="true" style="--preview-cols:${columns};--preview-rows:${rows};--preview-background:${background};--preview-live:${live}">
-      ${(preview?.cells || []).map(([x, y]) => `<span style="grid-column:${x + 1};grid-row:${y + 1}"></span>`).join('')}
-    </span>
-  `;
+/* ---------------------------------------------------------------------------
+ * Rail: patterns and logic cards
+ * ------------------------------------------------------------------------- */
+
+function setRailTab(tab) {
+  state.railTab = tab;
+  for (const button of elements.railKindTabs.querySelectorAll('[data-rail-tab]')) {
+    button.setAttribute('aria-selected', String(button.dataset.railTab === tab));
+  }
+  elements.patternPanel.hidden = tab !== 'patterns';
+  elements.logicPanel.hidden = tab !== 'logic';
+  if (tab === 'logic') renderLogicList();
 }
 
-function renderDevPublishPreview() {
-  if (!elements.devPreview) return;
-  try {
-    const preview = getCurrentCreationPreviewConfig();
-    if (!preview.version) throw new Error('empty');
-    state.previewConfig = preview;
-    elements.devPreview.innerHTML = getPreviewGridHtml(preview);
-    elements.devPreview.setAttribute('aria-label', preview.altText);
-    elements.devPreviewMode.textContent = preview.camera.mode === 'current-view' ? 'Current view' : 'Fit pattern';
-    elements.devPreviewDescription.textContent = preview.altText;
-    elements.previewFitPattern?.setAttribute('aria-pressed', String(preview.camera.mode !== 'current-view'));
-    elements.previewUseView?.setAttribute('aria-pressed', String(preview.camera.mode === 'current-view'));
-  } catch {
-    elements.devPreview.innerHTML = '<span class="preview-empty">Add live cells</span>';
-    elements.devPreview.setAttribute('aria-label', 'Add live cells to generate a publishing preview');
-    elements.devPreviewMode.textContent = 'Fit pattern';
-    elements.devPreviewDescription.textContent = 'Add live cells to choose a default camera frame.';
-    elements.previewFitPattern?.setAttribute('aria-pressed', 'true');
-    elements.previewUseView?.setAttribute('aria-pressed', 'false');
+function renderRail() {
+  renderPatternList();
+  if (state.mode === 'studio') renderLogicList();
+  setRailTab(state.railTab);
+}
+
+function getVisiblePresets() {
+  const query = state.patternQuery.trim().toLowerCase();
+  if (query) {
+    return presets.filter((preset) => [preset.name, preset.id, PATTERN_NOTES[preset.id], preset.note]
+      .some((value) => String(value || '').toLowerCase().includes(query)));
+  }
+  const group = getPresetGroup(presetGroups, state.activePresetGroup) ?? presetGroups[0];
+  return group.ids.map((id) => presets.find((preset) => preset.id === id)).filter(Boolean);
+}
+
+function renderPatternList() {
+  const searching = Boolean(state.patternQuery.trim());
+  elements.patternTabs.hidden = searching;
+  elements.patternTabs.innerHTML = '';
+  for (const group of presetGroups) {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.dataset.patternTab = group.id;
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(group.id === state.activePresetGroup));
+    tab.textContent = group.title;
+    elements.patternTabs.append(tab);
+  }
+
+  elements.patternList.innerHTML = '';
+  const visible = getVisiblePresets();
+  if (!searching && state.activePresetGroup === presetGroups[0].id) {
+    elements.patternList.append(createPatternCard({
+      id: 'random-soup',
+      name: 'Random soup',
+      note: PATTERN_NOTES['random-soup'],
+      coordinates: null,
+    }));
+  }
+  for (const preset of visible) elements.patternList.append(createPatternCard(preset));
+  if (visible.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'card-empty';
+    empty.textContent = 'No patterns match.';
+    elements.patternList.append(empty);
+  }
+  updatePresetSelection();
+}
+
+function createPatternCard(preset) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'card';
+  button.dataset.patternId = preset.id;
+  button.setAttribute('role', 'listitem');
+  button.setAttribute('aria-pressed', 'false');
+  const thumb = document.createElement('span');
+  thumb.className = 'card-thumb';
+  if (preset.coordinates) {
+    const thumbCanvas = document.createElement('canvas');
+    drawPatternThumbnail(thumbCanvas, preset.coordinates);
+    thumb.append(thumbCanvas);
+    button.draggable = true;
+    button.addEventListener('dragstart', (event) => {
+      event.dataTransfer.effectAllowed = 'copy';
+      event.dataTransfer.setData('text/life-preset-id', preset.id);
+      event.dataTransfer.setData('text/plain', preset.name);
+    });
+  } else {
+    thumb.innerHTML = '<svg class="icon" aria-hidden="true" style="width:22px;height:22px"><use href="#i-dice" /></svg>';
+  }
+  const text = document.createElement('span');
+  text.className = 'card-text';
+  text.innerHTML = `<span class="card-name">${escapeHtml(preset.name)}</span><span class="card-note">${escapeHtml(PATTERN_NOTES[preset.id] || preset.note || '')}</span>`;
+  button.append(thumb, text);
+  return button;
+}
+
+function drawPatternThumbnail(thumbCanvas, coordinates) {
+  const size = 54;
+  const ratio = window.devicePixelRatio || 1;
+  thumbCanvas.width = size * ratio;
+  thumbCanvas.height = size * ratio;
+  const preview = thumbCanvas.getContext('2d');
+  preview.setTransform(ratio, 0, 0, ratio, 0, 0);
+  const bounds = getPatternBounds(coordinates);
+  const rawCell = Math.min(8, 46 / Math.max(1, bounds.width, bounds.height));
+  const cell = rawCell >= 2 ? Math.floor(rawCell) : Math.max(0.6, rawCell);
+  const width = bounds.width * cell;
+  const height = bounds.height * cell;
+  const offsetX = Math.floor((size - width) / 2);
+  const offsetY = Math.floor((size - height) / 2);
+  preview.fillStyle = palette.canvas;
+  preview.fillRect(0, 0, size, size);
+  if (cell >= 4) {
+    preview.strokeStyle = palette.grid;
+    preview.lineWidth = 1;
+    preview.beginPath();
+    for (let x = offsetX % cell; x <= size; x += cell) { preview.moveTo(x + 0.5, 0); preview.lineTo(x + 0.5, size); }
+    for (let y = offsetY % cell; y <= size; y += cell) { preview.moveTo(0, y + 0.5); preview.lineTo(size, y + 0.5); }
+    preview.stroke();
+  }
+  preview.fillStyle = palette.cell;
+  const gap = cell >= 4 ? 1 : 0;
+  for (const [x, y] of coordinates) {
+    preview.fillRect(offsetX + (x - bounds.minX) * cell + gap, offsetY + (y - bounds.minY) * cell + gap, Math.max(1, cell - gap), Math.max(1, cell - gap));
   }
 }
 
-function choosePreviewFrame(mode) {
-  const coordinates = getLiveCoordinates();
-  if (!coordinates.length) {
-    showToast('Add live cells before choosing a preview', { kind: 'warning' });
-    return;
+function drawGateThumbnail(thumbCanvas, id) {
+  const size = 54;
+  const ratio = window.devicePixelRatio || 1;
+  thumbCanvas.width = size * ratio;
+  thumbCanvas.height = size * ratio;
+  const preview = thumbCanvas.getContext('2d');
+  preview.setTransform(ratio, 0, 0, ratio, 0, 0);
+  preview.fillStyle = palette.canvas;
+  preview.fillRect(0, 0, size, size);
+  const cacheKey = `${id}:${palette.cell}`;
+  let tileImage = gateThumbnailCache.get(cacheKey);
+  if (!tileImage) {
+    const experiment = buildCircuitExperiment(id, {});
+    const { origin, tile } = getCircuitMarkers(id);
+    const offscreen = document.createElement('canvas');
+    offscreen.width = tile;
+    offscreen.height = tile;
+    const tileCtx = offscreen.getContext('2d');
+    tileCtx.fillStyle = palette.canvas;
+    tileCtx.fillRect(0, 0, tile, tile);
+    tileCtx.fillStyle = palette.cell;
+    const board = experiment.board;
+    for (let y = 0; y < tile; y += 1) {
+      for (let x = 0; x < tile; x += 1) {
+        if (board.cells[(origin.y + y) * board.width + origin.x + x]) tileCtx.fillRect(x, y, 1.6, 1.6);
+      }
+    }
+    tileImage = offscreen;
+    gateThumbnailCache.set(cacheKey, tileImage);
   }
-  let frame;
-  if (mode === 'current-view') {
-    const bounds = getPatternBounds(coordinates);
-    const viewport = getWorldViewport();
-    const cellSize = getCellSize();
-    frame = {
-      x: Math.floor((viewport.left - state.panX) / cellSize) - bounds.minX,
-      y: Math.floor((viewport.top - state.panY) / cellSize) - bounds.minY,
-      width: Math.ceil(viewport.width / cellSize),
-      height: Math.ceil(viewport.height / cellSize),
-    };
+  preview.imageSmoothingEnabled = true;
+  preview.drawImage(tileImage, 3, 3, size - 6, size - 6);
+}
+
+function renderLogicList() {
+  elements.logicList.innerHTML = '';
+  for (const experiment of circuitExperiments) {
+    const card = GATE_CARDS[experiment.id] || { name: experiment.title, note: experiment.description };
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'card';
+    button.dataset.gateId = experiment.id;
+    button.setAttribute('role', 'listitem');
+    button.setAttribute('aria-pressed', String(state.circuit?.id === experiment.id));
+    const thumb = document.createElement('span');
+    thumb.className = 'card-thumb';
+    const thumbCanvas = document.createElement('canvas');
+    drawGateThumbnail(thumbCanvas, experiment.id);
+    thumb.append(thumbCanvas);
+    const text = document.createElement('span');
+    text.className = 'card-text';
+    text.innerHTML = `<span class="card-name">${escapeHtml(card.name)}</span><span class="card-note">${escapeHtml(card.note)}</span>`;
+    button.append(thumb, text);
+    elements.logicList.append(button);
   }
-  const previous = state.previewConfig;
-  state.previewConfig = {
-    ...previous,
-    camera: { mode, ...(frame ? { frame } : {}) },
-  };
-  const preview = getCurrentCreationPreviewConfig();
-  if (!preview.cells.length) {
-    state.previewConfig = previous;
-    showToast('The current view must include a live cell', { kind: 'warning' });
-    return;
+}
+
+function updatePresetSelection() {
+  for (const button of elements.patternList.querySelectorAll('[data-pattern-id]')) {
+    button.setAttribute('aria-pressed', String(state.tool === 'stamp' && button.dataset.patternId === state.selectedPreset?.id));
   }
-  state.previewConfig = preview;
-  renderDevPublishPreview();
-  markDesignDirty(true);
+  for (const button of elements.logicList.querySelectorAll('[data-gate-id]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.gateId === state.circuit?.id));
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Theme, menus, sheets
+ * ------------------------------------------------------------------------- */
+
+function getCurrentTheme() {
+  const explicit = document.documentElement.dataset.theme;
+  if (explicit === 'light' || explicit === 'dark') return explicit;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyTheme(theme, { persist = true } = {}) {
+  document.documentElement.dataset.theme = theme;
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage may be unavailable */ }
+  }
+  elements.themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
+  elements.themeToggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+  readPalette();
+  renderRail();
+  render();
+}
+
+function toggleTheme() {
+  applyTheme(getCurrentTheme() === 'dark' ? 'light' : 'dark');
+}
+
+const menus = [
+  ['#top-menu-toggle', '#top-menu'],
+  ['#project-menu-toggle', '#project-menu'],
+  ['#more-menu-toggle', '#more-menu'],
+  ['#speed-toggle', '#speed-menu'],
+  ['#how-life-works', '#rules-popover'],
+].map(([toggle, menu]) => ({ toggle: $(toggle), menu: $(menu) }));
+
+function isMenuOpen(menu) {
+  return menu.id === 'top-menu' ? menu.dataset.open === 'true' : !menu.hidden;
+}
+
+function setMenuOpen(entry, open) {
+  if (entry.menu.id === 'top-menu') entry.menu.dataset.open = String(open);
+  else entry.menu.hidden = !open;
+  entry.toggle.setAttribute('aria-expanded', String(open));
+}
+
+function closeMenus() {
+  for (const entry of menus) setMenuOpen(entry, false);
+}
+
+function toggleMenu(entry) {
+  const open = !isMenuOpen(entry.menu);
+  closeMenus();
+  setMenuOpen(entry, open);
+  if (open) entry.menu.querySelector('button, [tabindex]')?.focus?.({ preventScroll: true });
+}
+
+function openRail(open) {
+  elements.rail.dataset.open = String(open);
+  elements.sheetBackdrop.hidden = !open;
+  elements.patternsOpen.setAttribute('aria-expanded', String(open));
+  if (open) {
+    elements.inspector.dataset.open = 'false';
+    elements.inspectorToggle.setAttribute('aria-expanded', 'false');
+  }
+}
+
+function openInspector(open) {
+  elements.inspector.dataset.open = String(open);
+  elements.inspectorToggle.setAttribute('aria-expanded', String(open));
+  elements.sheetBackdrop.hidden = !open;
+  if (open) elements.rail.dataset.open = 'false';
+}
+
+function closeSheets() {
+  elements.rail.dataset.open = 'false';
+  elements.inspector.dataset.open = 'false';
+  elements.sheetBackdrop.hidden = true;
+  elements.patternsOpen.setAttribute('aria-expanded', 'false');
+  elements.inspectorToggle.setAttribute('aria-expanded', 'false');
 }
 
 function escapeHtml(value) {
@@ -3818,240 +3341,154 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-function renderPresets() {
-  elements.presetCount.textContent = `${presets.length}`;
-  elements.patternTabs.innerHTML = '';
-  elements.presets.innerHTML = '';
+/* ---------------------------------------------------------------------------
+ * Events
+ * ------------------------------------------------------------------------- */
 
-  const activeGroup = getPresetGroup(presetGroups, state.activePresetGroup) ?? presetGroups[0];
-  state.activePresetGroup = activeGroup.id;
-
-  for (const group of presetGroups) {
-    const tab = document.createElement('button');
-    const active = group.id === activeGroup.id;
-    tab.type = 'button';
-    tab.className = 'pattern-tab';
-    tab.dataset.patternTab = group.id;
-    tab.setAttribute('role', 'tab');
-    tab.setAttribute('aria-selected', String(active));
-    tab.classList.toggle('active', active);
-    tab.innerHTML = `
-      <span>${group.title}</span>
-      <small>${group.ids.length}</small>
-    `;
-    tab.addEventListener('click', () => {
-      state.activePresetGroup = group.id;
-      renderPresets();
-      updatePresetSelection();
-    });
-    elements.patternTabs.append(tab);
-  }
-
-  const groupElement = document.createElement('section');
-  groupElement.className = 'preset-group';
-  groupElement.setAttribute('role', 'tabpanel');
-  groupElement.innerHTML = `
-    <div class="preset-group-heading">
-      <strong>${activeGroup.title}</strong>
-      <span>${activeGroup.note}</span>
-    </div>
-  `;
-
-  for (const id of activeGroup.ids) {
-    const preset = presets.find((candidate) => candidate.id === id);
-    if (!preset) continue;
-
-    const button = document.createElement('button');
-    button.className = 'preset';
-    button.type = 'button';
-    button.dataset.presetId = preset.id;
-    button.innerHTML = `
-      <canvas class="preset-preview" width="72" height="48" aria-hidden="true"></canvas>
-      <span class="preset-topline">
-        <span class="preset-name">${preset.name}</span>
-        <span class="preset-meta">${getPresetStampSummary(preset)}</span>
-      </span>
-      <span class="preset-note">${preset.note}</span>
-    `;
-    button.draggable = true;
-    drawPresetPreview(button.querySelector('.preset-preview'), preset.coordinates);
-    button.addEventListener('click', () => selectPreset(preset));
-    button.addEventListener('dragstart', (event) => {
-      selectPreset(preset);
-      event.dataTransfer.effectAllowed = 'copy';
-      event.dataTransfer.setData('text/life-preset-id', preset.id);
-      event.dataTransfer.setData('text/plain', preset.name);
-    });
-    groupElement.append(button);
-  }
-
-  elements.presets.append(groupElement);
-}
-
-function drawPresetPreview(canvasElement, coordinates) {
-  if (!canvasElement) return;
-  const preview = canvasElement.getContext('2d');
-  const bounds = getPatternBounds(coordinates);
-  const cell = Math.max(2, Math.min(8, Math.floor(Math.min(58 / Math.max(1, bounds.width), 34 / Math.max(1, bounds.height)))));
-  const width = Math.max(1, bounds.width * cell);
-  const height = Math.max(1, bounds.height * cell);
-  const offsetX = Math.floor((canvasElement.width - width) / 2);
-  const offsetY = Math.floor((canvasElement.height - height) / 2);
-  preview.clearRect(0, 0, canvasElement.width, canvasElement.height);
-  preview.fillStyle = 'rgba(94, 234, 212, 0.08)';
-  preview.fillRect(0, 0, canvasElement.width, canvasElement.height);
-  preview.fillStyle = '#5eead4';
-  for (const [x, y] of coordinates) preview.fillRect(offsetX + x * cell, offsetY + y * cell, Math.max(1, cell - 1), Math.max(1, cell - 1));
-}
-
-function updatePresetSelection() {
-  for (const button of elements.presets.querySelectorAll('[data-preset-id]')) {
-    button.classList.toggle('active', button.dataset.presetId === state.selectedPreset?.id);
-  }
-}
-
-function applyGridSizeFromControls() {
-  applyDesignSettingsPatch({
-    gridPreset: elements.gridPreset.value,
-    width: Number(elements.gridWidth.value),
-    height: Number(elements.gridHeight.value),
-    wrapping: elements.wrapToggle.checked,
-  }, { resizeBoard: true });
-  elements.activeNote.textContent = `Dev grid updated: ${state.board.width} x ${state.board.height}.`;
-  elements.devOutput.textContent = `Grid reset to ${state.board.width} x ${state.board.height}.`;
-  showToast('Grid updated', { kind: 'success' });
-}
-
-function updateDesignStyleFromControls() {
-  applyDesignSettingsPatch({
-    wrapping: elements.wrapToggle.checked,
-    renderStyle: elements.renderStyle.value,
-    trailIntensity: elements.trailIntensity.value,
-    backgroundColor: elements.backgroundColor.value,
-    gridColor: elements.gridColor.value,
-    liveCellColor: elements.liveCellColor.value,
-    trailCellColor: elements.trailCellColor.value,
-    accentColor: elements.accentColor.value,
-    selectionColor: elements.selectionColor.value,
-  }, { resizeBoard: false });
-  elements.devOutput.textContent = getDesignSettingSummary(getCurrentDesignSettings());
-}
-
-function openDevProject(creationId) {
-  const creation = community.findCreation(creationId);
-  if (!creation) return;
-
-  loadCommunityCreation(creationId);
-  startDevProject('design', {
-    title: creation.title,
-    creationId: creation.id,
-    source: creation.remixedFromId ? findCommunityDesign(creation.remixedFromId) : null,
-    boardLoaded: true,
-    openTools: true,
-  });
-  setDesignMetadataFields(creation);
-}
-
-function loadTutorial(tutorial) {
-  if (!tutorial) return;
-
-  if (!tutorial.patternId) {
-    elements.tutorialOutput.textContent = `${tutorial.title}: ${tutorial.goal}`;
-    elements.devOutput.textContent = `${tutorial.title} is a reference lesson. Open the source, then build your version here.`;
-    showToast('Reference lesson selected', { kind: 'info' });
-    return;
-  }
-
-  const preset = presets.find((candidate) => candidate.id === tutorial.patternId);
-  if (!preset) return;
-
-  loadPreset(preset);
-  setTool('draw');
-  elements.tutorialOutput.textContent = `${tutorial.goal} Try: ${tutorial.modifyPrompt}`;
-  elements.devOutput.textContent = `Loaded ${tutorial.title}. Modify it, then save your variation as a draft.`;
-  markDesignDirty(true);
-  showToast(`Loaded ${tutorial.title}`, { kind: 'success' });
+function toLocal(event) {
+  const rect = state.pointer.rect || canvas.getBoundingClientRect();
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
 
 function bindEvents() {
-  window.addEventListener('resize', () => {
-    resizeCanvas();
+  new ResizeObserver(() => resizeCanvas()).observe(elements.canvasHost);
+  // Theme can change from the toggle, another tab, or a script; re-read tokens either way.
+  new MutationObserver(() => {
+    readPalette();
+    renderRail();
     render();
-  });
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(getCurrentTheme(), { persist: false }));
+  window.addEventListener('resize', () => { state.pointer.rect = null; });
+  MOBILE_QUERY.addEventListener('change', () => { closeSheets(); closeMenus(); });
 
   canvas.addEventListener('pointerdown', (event) => {
+    state.pointer.rect = canvas.getBoundingClientRect();
+    const local = toLocal(event);
+    state.pointer.pointers.set(event.pointerId, local);
     canvas.setPointerCapture(event.pointerId);
+    closeMenus();
+
+    if (state.pointer.pointers.size === 2) {
+      // Second finger: switch to pinch zoom and undo any single-finger paint.
+      if ((state.pointer.mode === 'draw' || state.pointer.mode === 'erase') && state.pointer.before) {
+        state.board = ownedSnapshot(state.pointer.before);
+        state.authoredStart = ownedSnapshot();
+        updateStats();
+      }
+      const [first, second] = [...state.pointer.pointers.values()];
+      state.pointer.pinch = {
+        startDistance: Math.hypot(second.x - first.x, second.y - first.y),
+        startZoom: state.zoom,
+        lastMid: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 },
+      };
+      state.pointer.active = false;
+      state.pointer.mode = 'pinch';
+      return;
+    }
+    if (state.pointer.pointers.size > 2) return;
+
     state.pointer.active = true;
-    const wantsPan = state.tool === 'pan' || event.button === 1 || event.shiftKey || event.getModifierState?.(' ');
+    const wantsPan = state.tool === 'pan' || event.button === 1 || event.shiftKey;
     state.pointer.mode = wantsPan
       ? 'pan'
       : state.tool === 'draw'
-      ? getLiveToolAction({ playing: state.playing, alive: getCellAliveAt(event.clientX, event.clientY) })
-      : state.tool;
+        ? getLiveToolAction({ playing: state.playing, alive: getCellAliveAt(local.x, local.y) })
+        : state.tool;
     state.pointer.lastCell = null;
-    state.pointer.lastX = event.clientX;
-    state.pointer.lastY = event.clientY;
-
-    if (state.tool === 'draw') beginAuthoringCommand();
+    state.pointer.lastX = local.x;
+    state.pointer.lastY = local.y;
+    state.pointer.before = ownedSnapshot();
 
     if (state.pointer.mode === 'pan') {
-      document.querySelector('.app-shell').classList.add('is-panning');
-      elements.activeNote.textContent = getToolStatusMessage({ tool: 'pan' });
+      elements.body.dataset.panning = 'true';
       return;
     }
+
+    if (state.pointer.mode === 'draw' || state.pointer.mode === 'erase') beginAuthoringCommand();
 
     if (state.pointer.mode === 'select') {
-      state.playing = false;
-      loadSimulation();
-      updatePlayButton();
-      state.pointer.selectionStart = screenToCell(event.clientX, event.clientY);
-      updateSelection(event.clientX, event.clientY);
+      if (state.playing) setPlaying(false);
+      state.pointer.selectionStart = screenToCell(local.x, local.y);
+      updateSelection(local.x, local.y);
+      renderToolStrip();
       return;
     }
 
-    applyToolAt(event.clientX, event.clientY);
+    if (state.pointer.mode === 'stamp' && !state.selectedPreset) {
+      showToast('Pick a pattern to stamp', { kind: 'info' });
+      return;
+    }
+
+    applyToolAt(local.x, local.y);
   });
 
   canvas.addEventListener('pointermove', (event) => {
-    state.hoverCell = screenToCell(event.clientX, event.clientY);
+    const local = toLocal(event);
+    if (state.pointer.pointers.has(event.pointerId)) state.pointer.pointers.set(event.pointerId, local);
+    if (event.pointerType !== 'touch') state.hoverCell = screenToCell(local.x, local.y);
+
+    if (state.pointer.mode === 'pinch' && state.pointer.pinch && state.pointer.pointers.size >= 2) {
+      const [first, second] = [...state.pointer.pointers.values()];
+      const mid = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+      const distance = Math.hypot(second.x - first.x, second.y - first.y);
+      state.panX += mid.x - state.pointer.pinch.lastMid.x;
+      state.panY += mid.y - state.pointer.pinch.lastMid.y;
+      state.pointer.pinch.lastMid = mid;
+      setZoom(getPinchZoom({ startDistance: state.pointer.pinch.startDistance, distance, startZoom: state.pointer.pinch.startZoom, minZoom: MIN_ZOOM, maxZoom: MAX_ZOOM }), mid.x, mid.y);
+      return;
+    }
 
     if (!state.pointer.active) return;
     if (state.pointer.mode === 'pan') {
-      state.panX += event.clientX - state.pointer.lastX;
-      state.panY += event.clientY - state.pointer.lastY;
-      state.pointer.lastX = event.clientX;
-      state.pointer.lastY = event.clientY;
+      state.panX += local.x - state.pointer.lastX;
+      state.panY += local.y - state.pointer.lastY;
+      state.pointer.lastX = local.x;
+      state.pointer.lastY = local.y;
       return;
     }
-    if (state.pointer.mode === 'select') { updateSelection(event.clientX, event.clientY); return; }
+    if (state.pointer.mode === 'select') { updateSelection(local.x, local.y); return; }
     if (state.pointer.mode === 'stamp') return;
 
-    applyToolAt(event.clientX, event.clientY);
+    applyToolAt(local.x, local.y);
   });
 
-  canvas.addEventListener('pointerup', (event) => {
-    canvas.releasePointerCapture(event.pointerId);
+  const endPointer = (event) => {
+    state.pointer.pointers.delete(event.pointerId);
+    try { canvas.releasePointerCapture(event.pointerId); } catch { /* already released */ }
+    if (state.pointer.mode === 'pinch') {
+      if (state.pointer.pointers.size === 0) {
+        state.pointer.mode = 'draw';
+        state.pointer.pinch = null;
+      }
+      return;
+    }
+    if (!state.pointer.active) return;
     state.pointer.active = false;
     if (state.pointer.mode === 'draw' || state.pointer.mode === 'erase') finishAuthoringCommand();
     if (state.pointer.mode === 'select' && state.pointer.selectionStart) {
-      updateSelection(event.clientX, event.clientY);
-      elements.activeNote.textContent = `Selected ${state.selection.width} × ${state.selection.height}. Use selection controls, arrows to move, R to rotate, or F to reflect.`;
+      const local = toLocal(event);
+      updateSelection(local.x, local.y);
       state.pointer.selectionStart = null;
+      renderToolStrip();
     }
     state.pointer.lastCell = null;
-    document.querySelector('.app-shell').classList.remove('is-panning');
-  });
+    state.pointer.before = null;
+    delete elements.body.dataset.panning;
+  };
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
 
   canvas.addEventListener('pointerleave', () => {
     state.hoverCell = null;
-    document.querySelector('.app-shell').classList.remove('is-panning');
   });
 
   canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
     const action = getWheelAction(event);
     if (action.type === 'zoom') {
-      setZoom(state.zoom * action.zoomDelta, event.clientX, event.clientY);
+      const local = toLocal(event);
+      setZoom(state.zoom * action.zoomDelta, local.x, local.y);
       return;
     }
     state.panX += action.panX;
@@ -4067,336 +3504,232 @@ function bindEvents() {
     event.preventDefault();
     const presetId = event.dataTransfer.getData('text/life-preset-id');
     const preset = presets.find((candidate) => candidate.id === presetId);
-
     if (!preset) return;
-
+    state.pointer.rect = canvas.getBoundingClientRect();
+    const local = toLocal(event);
+    const cell = screenToCell(local.x, local.y);
+    const previous = { preset: state.selectedPreset, rotation: state.stampRotation, flip: state.stampFlipX };
     state.selectedPreset = preset;
-    const cell = screenToCell(event.clientX, event.clientY);
+    state.stampRotation = 0;
+    state.stampFlipX = false;
     stampPattern(cell.x, cell.y);
+    if (state.tool !== 'stamp') {
+      state.selectedPreset = previous.preset;
+      state.stampRotation = previous.rotation;
+      state.stampFlipX = previous.flip;
+    }
     updatePresetSelection();
+    showToast(`Placed ${preset.name}`, { kind: 'success' });
   });
 
-  elements.playToggle.addEventListener('click', () => {
-    state.playing = !state.playing;
-    if (!state.playing) loadSimulation();
-    updatePlayButton();
+  // Transport
+  elements.playToggle.addEventListener('click', () => setPlaying(!state.playing));
+  elements.step.addEventListener('click', () => { if (state.playing) setPlaying(false); stepSimulation(); });
+  elements.reset.addEventListener('click', resetToStart);
+  elements.speedMenu.addEventListener('click', (event) => {
+    const item = event.target.closest('[data-speed]');
+    if (!item) return;
+    setSpeed(Number(item.dataset.speed));
+    closeMenus();
+  });
+  elements.zoomOut.addEventListener('click', () => setZoom(state.zoom / 1.25));
+  elements.zoomIn.addEventListener('click', () => setZoom(state.zoom * 1.25));
+  elements.fit.addEventListener('click', () => { if (state.circuit) fitCircuit(); else fitBoard(); });
+  elements.fitMobile.addEventListener('click', () => { closeMenus(); if (state.circuit) fitCircuit(); else fitBoard(); });
+  elements.patternsOpen.addEventListener('click', () => openRail(elements.rail.dataset.open !== 'true'));
+  elements.railClose.addEventListener('click', () => closeSheets());
+  elements.sheetBackdrop.addEventListener('click', () => closeSheets());
+
+  // Tool strip
+  for (const button of elements.toolButtons) {
+    button.addEventListener('click', () => chooseTool(button.dataset.tool));
+  }
+  elements.selectionGroup.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-selection-command]');
+    if (button) selectionCommand(button.dataset.selectionCommand);
+  });
+  elements.stampRotateLeft.addEventListener('click', () => rotateStamp(-90));
+  elements.stampRotateRight.addEventListener('click', () => rotateStamp(90));
+  elements.stampFlip.addEventListener('click', flipStamp);
+  elements.stampDone.addEventListener('click', exitStamp);
+  elements.undo.addEventListener('click', undoBoard);
+  elements.redo.addEventListener('click', redoBoard);
+  elements.clearBoard.addEventListener('click', () => { closeMenus(); clearWorld(); });
+  elements.importRle.addEventListener('click', () => { closeMenus(); openRleDialog('import'); });
+  elements.exportRle.addEventListener('click', () => { closeMenus(); openRleDialog('export'); });
+  elements.shortcuts.addEventListener('click', () => { closeMenus(); elements.shortcutsDialog.showModal(); });
+  elements.howLifeWorksMobile.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closeMenus();
+    setMenuOpen(menus.find((entry) => entry.menu.id === 'rules-popover'), true);
+  });
+  elements.rleStamp.addEventListener('click', importRleFromDialog);
+  elements.rleCopy.addEventListener('click', copyRleFromDialog);
+
+  // Menus
+  for (const entry of menus) {
+    entry.toggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleMenu(entry);
+    });
+  }
+  document.addEventListener('click', (event) => {
+    if (menus.some((entry) => entry.menu.contains(event.target) && entry.menu.id === 'rules-popover')) return;
+    if (!event.target.closest('.menu, .popover, .top-actions')) closeMenus();
+    else if (event.target.closest('.menu > button')) closeMenus();
   });
 
-  elements.step.addEventListener('click', () => {
-    stepSimulation();
-  });
-
-  elements.clear.addEventListener('click', () => {
-    clearWorld();
-  });
-
-  elements.randomize.addEventListener('click', () => {
-    randomSoup();
-  });
-  document.querySelectorAll('[data-selection-command]').forEach((button) => {
-    button.addEventListener('click', () => selectionCommand(button.dataset.selectionCommand));
-  });
-  elements.undo?.addEventListener('click', undoBoard);
-  elements.redo?.addEventListener('click', redoBoard);
-  elements.resetStart?.addEventListener('click', resetToStart);
-  elements.promoteState?.addEventListener('click', promoteCurrentStateToStart);
-  elements.fitBoard?.addEventListener('click', () => {
-    centerWorld();
-    setZoom(1);
-    elements.activeNote.textContent = 'Board fitted to view.';
-  });
-
-  elements.toolDrawerToggle?.addEventListener('click', () => {
-    setToolDrawerOpen(!state.toolDrawerOpen);
-    if (state.toolDrawerOpen) elements.toolDrawerClose?.focus({ preventScroll: true });
-  });
-
-  elements.toolDrawerClose?.addEventListener('click', () => {
-    setToolDrawerOpen(false);
-    elements.toolDrawerToggle?.focus({ preventScroll: true });
-  });
-
-  elements.devCreateDesign?.addEventListener('click', () => {
-    startDevProject('design', { title: 'Untitled Design', openTools: false });
-  });
-
-  elements.devCreateProject?.addEventListener('click', () => {
-    startDevProject('project', { title: 'Untitled Project', openTools: false });
-  });
-
-  elements.devDesignTitle?.addEventListener('input', () => {
-    setDesignTitle(elements.devDesignTitle.value);
-    markDesignDirty(true);
-    elements.activeNote.textContent = `Renamed draft to ${elements.devDesignTitle.value || 'Untitled design'}.`;
-  });
-  elements.devDesignDescription?.addEventListener('input', () => {
-    elements.creationDescription.value = elements.devDesignDescription.value;
-    markDesignDirty(true);
-  });
-  elements.devDesignTags?.addEventListener('input', () => {
-    elements.creationTags.value = elements.devDesignTags.value;
-    markDesignDirty(true);
-  });
-  elements.devDesignAttribution?.addEventListener('input', () => markDesignDirty(true));
-  elements.devDesignTutorial?.addEventListener('input', () => markDesignDirty(true));
-  elements.previewFitPattern?.addEventListener('click', () => choosePreviewFrame('fit-pattern'));
-  elements.previewUseView?.addEventListener('click', () => choosePreviewFrame('current-view'));
-
-  elements.stampRotateLeft?.addEventListener('click', () => rotateStamp(-90));
-  elements.stampRotateRight?.addEventListener('click', () => rotateStamp(90));
-  elements.stampFlip?.addEventListener('click', flipStamp);
-  elements.stampOff?.addEventListener('click', turnStampOff);
-  elements.playgroundTutorialNext?.addEventListener('click', advancePlaygroundIntro);
-  elements.playgroundTutorialSkip?.addEventListener('click', closePlaygroundIntro);
-  elements.playgroundTutorial?.addEventListener('click', (event) => {
-    if (event.target.closest('button')) return;
-    advancePlaygroundIntro();
-  });
-
-  elements.speed.addEventListener('input', () => {
-    setSpeed(Number(elements.speed.value));
-    state.designSettings = mergeDesignSettings(state.designSettings, { speed: state.speed });
-    markDesignDirty(true);
-  });
-
-  elements.zoom.addEventListener('input', () => {
-    setZoom(Number(elements.zoom.value) / 100);
-    state.designSettings = mergeDesignSettings(state.designSettings, { zoom: state.zoom });
-    markDesignDirty(true);
-  });
-
-  elements.ageColors.addEventListener('change', () => {
-    state.ageColors = elements.ageColors.checked;
-  });
-
-  elements.modePlayground.addEventListener('click', () => navigateTo('/'));
-
-  elements.modeDev.addEventListener('click', () => {
-    state.devProjectActive = Boolean(state.activeDesignSession);
-    navigateTo('/studio');
-  });
-
-  elements.modeCommunity.addEventListener('click', () => navigateTo('/community'));
-
-  elements.accountEntry?.addEventListener('click', () => openAccountDialog());
-  elements.accountTabs?.addEventListener('click', (event) => {
+  // Theme and account
+  elements.themeToggle.addEventListener('click', () => { toggleTheme(); closeMenus(); });
+  elements.accountEntry.addEventListener('click', () => { closeMenus(); openAccountDialog(); });
+  elements.accountTabs.addEventListener('click', (event) => {
     const button = event.target.closest('[data-account-mode]');
     if (!button) return;
     state.accountMode = button.dataset.accountMode;
     renderAccountDialog();
   });
-  elements.accountSubmit?.addEventListener('click', submitAccountDialog);
-  elements.accountCreateRecovery?.addEventListener('click', generateRecoveryKey);
-  elements.accountDelete?.addEventListener('click', deleteCurrentAccount);
-  elements.accountDialog?.addEventListener('keydown', trapAccountDialogFocus);
-  elements.accountDialog?.addEventListener('close', () => {
+  elements.accountSubmit.addEventListener('click', submitAccountDialog);
+  elements.accountCreateRecovery.addEventListener('click', generateRecoveryKey);
+  elements.accountSignOut.addEventListener('click', async () => { await signOutCommunity(); elements.accountDialog.close(); showToast('Signed out', { kind: 'success' }); });
+  elements.accountDelete.addEventListener('click', deleteCurrentAccount);
+  elements.accountDialog.addEventListener('keydown', trapAccountDialogFocus);
+  elements.accountDialog.addEventListener('close', () => {
     const pending = pendingActions.get();
     if (pending?.attempted) pendingActions.retry(pending.token);
     if (state.accountDialogTrigger?.isConnected) state.accountDialogTrigger.focus({ preventScroll: true });
     state.accountDialogTrigger = null;
   });
+
+  // Navigation
+  elements.modePlayground.addEventListener('click', () => navigateTo('/'));
+  elements.modeStudio.addEventListener('click', () => { state.studioView = state.session ? 'project' : state.studioView; navigateTo('/studio'); });
+  elements.modeCommunity.addEventListener('click', () => { state.communityView = 'gallery'; state.publicProfile = null; navigateTo('/community'); });
+  $('#brand').addEventListener('click', (event) => { event.preventDefault(); navigateTo('/'); });
   window.addEventListener('popstate', routeCurrentLocation);
 
-  elements.saveProfile.addEventListener('click', () => saveLocalProfile());
-
-  elements.communitySignUp.addEventListener('click', signUpCommunity);
-  elements.communitySignIn.addEventListener('click', signInCommunity);
-
-  elements.communitySignOut.addEventListener('click', () => {
-    signOutCommunity();
+  // Rail
+  elements.patternSearch.addEventListener('input', () => {
+    state.patternQuery = elements.patternSearch.value;
+    renderPatternList();
+  });
+  elements.patternTabs.addEventListener('click', (event) => {
+    const tab = event.target.closest('[data-pattern-tab]');
+    if (!tab) return;
+    state.activePresetGroup = tab.dataset.patternTab;
+    renderPatternList();
+  });
+  elements.patternList.addEventListener('click', (event) => {
+    const card = event.target.closest('[data-pattern-id]');
+    if (!card) return;
+    if (card.dataset.patternId === 'random-soup') {
+      randomSoup();
+      closeSheets();
+      return;
+    }
+    const preset = presets.find((candidate) => candidate.id === card.dataset.patternId);
+    if (!preset) return;
+    selectPreset(preset);
+    closeSheets();
+  });
+  elements.railKindTabs.addEventListener('click', (event) => {
+    const tab = event.target.closest('[data-rail-tab]');
+    if (tab) setRailTab(tab.dataset.railTab);
+  });
+  elements.logicList.addEventListener('click', (event) => {
+    const card = event.target.closest('[data-gate-id]');
+    if (!card) return;
+    openCircuitExperiment(card.dataset.gateId);
+    closeSheets();
+    showToast(`${GATE_CARDS[card.dataset.gateId]?.name || 'Gate'} loaded. Flip the inputs, then run.`, { kind: 'success' });
   });
 
-  elements.saveCreation.addEventListener('click', () => saveCurrentCreation());
-
-  elements.publishCreation.addEventListener('click', () => publishActiveCreation());
-
-  elements.saveDesign.addEventListener('click', () => saveCurrentCreation());
-
-  elements.publishDesign.addEventListener('click', () => publishActiveCreation());
-  elements.unpublishDesign?.addEventListener('click', unpublishActiveCreation);
-  elements.archiveDesign?.addEventListener('click', archiveActiveCreation);
-  elements.deleteDesign?.addEventListener('click', deleteActiveCreation);
-  elements.devVersionList?.addEventListener('click', (event) => {
+  // Studio
+  elements.projectsBack.addEventListener('click', showProjectsList);
+  elements.newProject.addEventListener('click', () => startProject({ title: 'Untitled project' }));
+  elements.projectsList.addEventListener('click', (event) => {
+    const card = event.target.closest('[data-project-id]');
+    if (card) openProject(card.dataset.projectId);
+  });
+  elements.projectTitle.addEventListener('input', () => {
+    if (state.session) state.session.title = elements.projectTitle.value.trim() || 'Untitled project';
+    markDesignDirty(true);
+  });
+  elements.projectTitle.addEventListener('change', () => setProjectFields({ title: elements.projectTitle.value, description: elements.projectDescription.value, tags: elements.projectTags.value }));
+  elements.projectTitle.addEventListener('keydown', (event) => { if (event.key === 'Enter') elements.projectTitle.blur(); });
+  elements.projectDescription.addEventListener('input', () => markDesignDirty(true));
+  elements.projectTags.addEventListener('input', () => markDesignDirty(true));
+  elements.saveProject.addEventListener('click', () => saveCurrentCreation());
+  elements.publishProject.addEventListener('click', () => saveCurrentCreation({ publish: true }));
+  elements.publishProjectMobile.addEventListener('click', () => saveCurrentCreation({ publish: true }));
+  elements.unpublishProject.addEventListener('click', () => { closeMenus(); unpublishActiveCreation(); });
+  elements.archiveProject.addEventListener('click', () => { closeMenus(); archiveActiveCreation(); });
+  elements.deleteProject.addEventListener('click', () => { closeMenus(); deleteActiveCreation(); });
+  elements.inspectorToggle.addEventListener('click', () => openInspector(elements.inspector.dataset.open !== 'true'));
+  elements.inspectorClose.addEventListener('click', () => closeSheets());
+  elements.gridSize.addEventListener('change', () => applyGridSizeChoice(elements.gridSize.value));
+  elements.edges.addEventListener('change', () => applyEdgesChoice(elements.edges.value));
+  elements.inputsList.addEventListener('change', (event) => {
+    const input = event.target.closest('[data-input]');
+    if (input) setCircuitInput(input.dataset.input, input.checked);
+  });
+  elements.runCircuit.addEventListener('click', runCircuitExperiment);
+  elements.fillTruthTable.addEventListener('click', fillTruthTable);
+  elements.versionHistory.addEventListener('click', (event) => {
     const button = event.target.closest('[data-restore-version-id]');
-    if (button && !button.disabled) restoreActiveVersion(button.dataset.restoreVersionId);
+    if (button) restoreActiveVersion(button.dataset.restoreVersionId);
   });
 
-  elements.copySharePayload.addEventListener('click', () => {
-    copySharePayload();
+  // Community
+  elements.communityPanel.addEventListener('click', (event) => {
+    if (event.target.closest('#post-comment')) { postCommunityComment(); return; }
+    handleCommunityAction(event);
   });
-
-  elements.communityList.addEventListener('click', handleCommunityAction);
-  elements.trendingList.addEventListener('click', handleCommunityAction);
-  elements.communityFamousList.addEventListener('click', handleCommunityAction);
-  elements.communityRemixList.addEventListener('click', handleCommunityAction);
-  elements.communityDetail.addEventListener('click', handleCommunityAction);
-  elements.postComment.addEventListener('click', postCommunityComment);
-
   elements.communitySearch.addEventListener('input', () => {
     state.communitySearch = elements.communitySearch.value;
     renderCommunity();
   });
-
-  elements.communityFilter.addEventListener('change', () => {
-    setCommunityFilter(elements.communityFilter.value);
+  elements.communityFilters.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-community-filter]');
+    if (!button) return;
+    state.communityFilter = button.dataset.communityFilter;
+    state.communityView = 'gallery';
+    renderCommunity();
   });
 
-  elements.communityFilterButton?.addEventListener('click', () => {
-    const expanded = elements.communityFilterButton.getAttribute('aria-expanded') === 'true';
-    elements.communityFilterButton.setAttribute('aria-expanded', String(!expanded));
-    elements.communityFilterMenu?.classList.toggle('open', !expanded);
-  });
-
-  elements.communityFilterButton?.addEventListener('keydown', (event) => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    event.preventDefault();
-    elements.communityFilterButton.setAttribute('aria-expanded', 'true');
-    elements.communityFilterMenu?.classList.add('open');
-    const options = [...elements.communityFilterOptions];
-    options[event.key === 'ArrowDown' ? 0 : options.length - 1]?.focus();
-  });
-
-  elements.communityFilterMenu?.addEventListener('keydown', (event) => {
-    const options = [...elements.communityFilterOptions];
-    const currentIndex = options.indexOf(document.activeElement);
+  // Keyboard
+  window.addEventListener('keydown', (event) => {
+    const target = event.target;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target?.isContentEditable) return;
+    if (document.querySelector('dialog[open]')) return;
+    const key = event.key.toLowerCase();
+    const meta = event.metaKey || event.ctrlKey;
 
     if (event.key === 'Escape') {
-      event.preventDefault();
-      elements.communityFilterButton?.setAttribute('aria-expanded', 'false');
-      elements.communityFilterMenu?.classList.remove('open');
-      elements.communityFilterButton?.focus();
+      if (menus.some((entry) => isMenuOpen(entry.menu))) { closeMenus(); return; }
+      if (elements.rail.dataset.open === 'true' || elements.inspector.dataset.open === 'true') { closeSheets(); return; }
+      if (state.tool === 'stamp') { exitStamp(); return; }
+      if (state.selection) selectionCommand('deselect');
       return;
     }
+    if (state.mode === 'community' || (state.mode === 'studio' && state.studioView === 'projects')) return;
 
-    const movement = {
-      ArrowDown: Math.min(options.length - 1, currentIndex + 1),
-      ArrowUp: Math.max(0, currentIndex - 1),
-      Home: 0,
-      End: options.length - 1,
-    }[event.key];
-    if (movement === undefined) return;
-    event.preventDefault();
-    options[movement]?.focus();
-  });
-
-  for (const option of elements.communityFilterOptions) {
-    option.addEventListener('click', () => {
-      elements.communityFilterButton?.setAttribute('aria-expanded', 'false');
-      elements.communityFilterMenu?.classList.remove('open');
-      setCommunityFilter(option.dataset.communityFilterValue);
-      elements.communityFilterButton?.focus({ preventScroll: true });
-    });
-  }
-
-  document.addEventListener('click', (event) => {
-    if (!event.target.closest('[data-custom-select="community-filter"]')) {
-      elements.communityFilterButton?.setAttribute('aria-expanded', 'false');
-      elements.communityFilterMenu?.classList.remove('open');
-    }
-  });
-
-  for (const button of elements.speedStepButtons) {
-    button.addEventListener('click', () => {
-      setSpeed(state.speed + Number(button.dataset.speedStep));
-      state.designSettings = mergeDesignSettings(state.designSettings, { speed: state.speed });
-      markDesignDirty(true);
-    });
-  }
-
-  for (const button of elements.zoomStepButtons) {
-    button.addEventListener('click', () => {
-      setZoom((Number(elements.zoom.value) + Number(button.dataset.zoomStep)) / 100);
-      state.designSettings = mergeDesignSettings(state.designSettings, { zoom: state.zoom });
-      markDesignDirty(true);
-    });
-  }
-
-  for (const button of elements.devComponentButtons) {
-    button.addEventListener('click', () => selectDevComponent(button.dataset.devComponent));
-  }
-
-  for (const button of elements.devDemoButtons) {
-    button.addEventListener('click', () => runDevDemo(button.dataset.devDemo));
-  }
-
-  for (const button of elements.devClaimButtons) {
-    button.addEventListener('click', () => runDevClaim(button.dataset.devClaim));
-  }
-
-  elements.applyGridSize.addEventListener('click', applyGridSizeFromControls);
-  elements.gridPreset.addEventListener('change', () => {
-    const preset = createDesignSettings({ gridPreset: elements.gridPreset.value });
-    elements.gridWidth.value = preset.width;
-    elements.gridHeight.value = preset.height;
-  });
-  elements.wrapToggle.addEventListener('change', updateDesignStyleFromControls);
-  elements.renderStyle.addEventListener('change', updateDesignStyleFromControls);
-  elements.trailIntensity.addEventListener('change', updateDesignStyleFromControls);
-  elements.backgroundColor.addEventListener('input', updateDesignStyleFromControls);
-  elements.gridColor.addEventListener('input', updateDesignStyleFromControls);
-  elements.liveCellColor.addEventListener('input', updateDesignStyleFromControls);
-  elements.trailCellColor.addEventListener('input', updateDesignStyleFromControls);
-  elements.accentColor.addEventListener('input', updateDesignStyleFromControls);
-  elements.selectionColor.addEventListener('input', updateDesignStyleFromControls);
-  elements.devProjectList.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-dev-project-id]');
-    if (button) openDevProject(button.dataset.devProjectId);
-  });
-  elements.tutorialGroups.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-tutorial-group]');
-    if (!button) return;
-    state.activeTutorialGroup = button.dataset.tutorialGroup;
-    renderTutorials();
-  });
-  elements.tutorialList.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-tutorial-title]');
-    if (!button) return;
-    const tutorial = tutorialCatalog.find((candidate) => candidate.title === button.dataset.tutorialTitle);
-    loadTutorial(tutorial);
-  });
-
-  elements.importRle.addEventListener('click', () => {
-    importRle();
-  });
-
-  elements.exportRle.addEventListener('click', () => {
-    exportRle();
-  });
-
-  for (const button of elements.toolButtons) {
-    button.addEventListener('click', () => chooseTool(button.dataset.tool));
-  }
-
-  window.addEventListener('keydown', (event) => {
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-
-    if (event.key === ' ') {
-      event.preventDefault();
-      state.playing = !state.playing;
-      if (!state.playing) loadSimulation();
-      updatePlayButton();
-    }
-    if (event.key === '.') stepSimulation();
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
-      event.preventDefault();
-      if (event.shiftKey) redoBoard(); else undoBoard();
-    }
-    const key = event.key.toLowerCase();
-    if ((event.metaKey || event.ctrlKey) && ['c', 'v'].includes(key)) {
-      event.preventDefault();
-      selectionCommand(key === 'c' ? 'copy' : 'paste');
-    }
-    if (event.key === '1') chooseTool('draw');
-    if (event.key === '2') chooseTool('stamp');
-    if (key === 'r') selectionCommand('rotate');
-    if (key === 'f') selectionCommand('reflect');
-    if (event.key === 'Escape') selectionCommand('clear');
+    if (event.key === ' ') { event.preventDefault(); setPlaying(!state.playing); return; }
+    if (meta && key === 'z') { event.preventDefault(); if (event.shiftKey) redoBoard(); else undoBoard(); return; }
+    if (meta && (key === 'c' || key === 'v')) { event.preventDefault(); selectionCommand(key === 'c' ? 'copy' : 'paste'); return; }
+    if (meta) return;
+    if (key === 'n') { if (state.playing) setPlaying(false); stepSimulation(); return; }
+    if (key === 'r') { resetToStart(); return; }
+    if (key === 'f') { if (state.circuit) fitCircuit(); else fitBoard(); return; }
+    const tool = getToolForKey(event.key);
+    if (tool) { chooseTool(tool); return; }
+    if ((event.key === 'Delete' || event.key === 'Backspace') && state.selection) { event.preventDefault(); selectionCommand('delete'); return; }
     const directions = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
     if (state.selection && directions[event.key]) {
       event.preventDefault();
       selectionCommand(directions[event.key]);
     }
   });
+
   window.addEventListener('offline', () => {
     if (state.designDirty) setSaveStatus('offline');
   });
@@ -4409,6 +3742,10 @@ function bindEvents() {
     event.returnValue = '';
   });
 }
+
+/* ---------------------------------------------------------------------------
+ * Loop and boot
+ * ------------------------------------------------------------------------- */
 
 function loop(timestamp) {
   if (!state.lastTick) state.lastTick = timestamp;
@@ -4427,10 +3764,6 @@ function loop(timestamp) {
     }
     // A delayed frame must not run an unlimited backlog on the UI thread.
     if (state.accumulator >= interval) state.accumulator = interval - 1;
-  } else {
-    for (let i = 0; i < state.trail.length; i += 1) {
-      if (!state.board.cells[i] && state.trail[i] > 0) state.trail[i] = Math.floor(state.trail[i] * 0.98);
-    }
   }
 
   render();
@@ -4440,56 +3773,51 @@ function loop(timestamp) {
 async function boot() {
   communityState = await localCommunity.loadCommunityState();
   state.simulation = createSimulationClient();
-  resizeCanvas();
-  centerWorld();
-  renderPresets();
-  renderCircuitExperiments();
-  renderCommunity();
-  updateStats();
-  updatePlayButton();
-  setMode('playground');
+  applyTheme(getCurrentTheme(), { persist: false });
+  setSpeed(state.speed);
+  setZoom(1);
   bindEvents();
+
   const glider = findPreset('glider');
   const gliderBounds = getPatternBounds(glider.coordinates);
   state.board = placePattern(state.board, glider.coordinates,
     Math.floor(state.board.width / 2 - gliderBounds.width / 2),
     Math.floor(state.board.height / 2 - gliderBounds.height / 2));
-  resetBoardStorage();
-  markLivingCells(230, 1);
-  updateStats();
-  elements.activeNote.textContent = 'A glider is ready to explore. Press Play, then make it your own.';
   state.authoredStart = ownedSnapshot();
   loadSimulation();
+  updateStats();
+  updatePlayButton();
+  renderToolStrip();
+  syncDesignControls();
+  resizeCanvas();
   markDesignDirty(false);
-  const recoveredDraft = await restoreLocalRecovery();
+
+  await restoreLocalRecovery();
   importSharedBuildFromHash();
-  initializeCommunityBackend().then(() => routeCurrentLocation());
-  mountLandingIntro({
-    layer: elements.introLayer,
-    canvas: elements.introCanvas,
-    prompt: elements.introPrompt,
-    startButton: elements.introStart,
-    skipButton: elements.introSkip,
-    title: elements.introCardTitle,
-    help: elements.introHelp,
-    profileFields: elements.introProfileFields,
-    direct: true,
-    onPlayground: () => {
-      if (recoveredDraft && !window.location.hash) {
-        setMode('dev');
-        elements.devOutput.textContent = 'Recovered your unsaved local draft. Save it when you are ready.';
-        return;
-      }
-      routeCurrentLocation();
-    },
-    onDevelop: async () => {
-      const saved = await saveIntroProfileFromFields({ requireProfile: true });
-      if (saved) setMode('dev');
-      return saved;
-    },
+  await routeCurrentLocation();
+  initializeCommunityBackend().then(() => {
+    const path = window.location.pathname;
+    if (/^\/(c|u)\//.test(path) || state.mode === 'community') routeCurrentLocation();
   });
   requestAnimationFrame(loop);
 }
+
+// Read-only hook for browser tests: live cell coordinates and a few state facts.
+window.__lifeLab = {
+  liveCells: () => getLiveCoordinates(),
+  snapshot: () => ({
+    generation: state.board.generation,
+    population: getPopulation(state.board),
+    width: state.board.width,
+    height: state.board.height,
+    tool: state.tool,
+    mode: state.mode,
+    zoom: state.zoom,
+    playing: state.playing,
+    circuit: state.circuit?.id || null,
+    selection: state.selection,
+  }),
+};
 
 boot();
 

@@ -1,0 +1,247 @@
+/* Life Lab — community: gallery and detail. */
+
+.community-page {
+  display: block;
+}
+
+.community-gallery {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  gap: 16px;
+}
+
+.gallery-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.gallery-toolbar .search-field {
+  flex: 1 1 260px;
+  max-width: 360px;
+}
+
+.community-status {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.community-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.community-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: border-color var(--motion);
+}
+
+.community-card:hover {
+  border-color: var(--text);
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--preview-cols, 6), 1fr);
+  grid-template-rows: repeat(var(--preview-rows, 5), 1fr);
+  gap: 1px;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+}
+
+.preview-grid > span {
+  background: var(--cell);
+  border-radius: 1px;
+}
+
+.preview-grid-empty {
+  display: block;
+}
+
+.community-card-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.community-card-text strong {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.community-card-text span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.community-card .button {
+  justify-self: start;
+}
+
+.community-empty {
+  grid-column: 1 / -1;
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+
+/* Detail */
+.community-detail {
+  max-width: 880px;
+  margin: 0 auto;
+  display: grid;
+  gap: 16px;
+}
+
+.detail-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.detail-preview .preview-grid {
+  aspect-ratio: 4 / 3;
+  padding: 12px;
+  gap: 2px;
+}
+
+.detail-body {
+  display: grid;
+  gap: 12px;
+}
+
+.detail-body h1 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.detail-author {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.detail-author button {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.detail-description {
+  font-size: 14px;
+}
+
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-tags span {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.detail-meta {
+  display: flex;
+  gap: 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-actions .button-quiet {
+  color: var(--muted);
+}
+
+.comments {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.comments h2 {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.comment {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.comment strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.comment-form {
+  display: grid;
+  gap: 8px;
+}
+
+.comment-form .button {
+  justify-self: end;
+}
+
+.detail-state {
+  display: grid;
+  gap: 12px;
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.detail-state h1 {
+  font-size: 18px;
+  color: var(--text);
+}
+
+.detail-state .button {
+  justify-self: center;
+}
+
+@media (max-width: 899px) {
+  .detail-layout {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .community-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+}

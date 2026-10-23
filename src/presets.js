@@ -592,21 +592,27 @@ export function getPresetStampSummary(preset) {
 
 export const presetGroups = [
   {
-    id: 'showcase',
-    title: 'Showcase',
-    note: 'Bigger starts that immediately show motion, growth, and machines.',
-    ids: ['gun-battery', 'spaceship-squadron', 'pulsar-constellation', 'methuselah-garden', 'glider-fleet', 'blinker-wave'],
+    id: 'start',
+    title: 'Start',
+    note: 'Five famous patterns to try first.',
+    ids: ['glider', 'blinker', 'gosper-gun', 'pulsar', 'r-pentomino'],
   },
   {
     id: 'motion',
     title: 'Motion',
     note: 'Patterns that pulse, move, fire, or unfold.',
-    ids: ['blinker', 'toad', 'beacon', 'pulsar', 'pentadecathlon', 'glider', 'lwss', 'gosper-gun', 'traffic-light', 'small-exploder', 'ten-cell-row', 'glider-pair', 'r-pentomino', 'diehard', 'acorn'],
+    ids: ['toad', 'beacon', 'pentadecathlon', 'lwss', 'traffic-light', 'small-exploder', 'ten-cell-row', 'glider-pair', 'diehard', 'acorn'],
   },
   {
     id: 'basics',
     title: 'Basics',
-    note: 'Small reference shapes for learning why some cells survive.',
+    note: 'Small still lifes that never change.',
     ids: ['block', 'beehive', 'loaf', 'boat', 'tub'],
+  },
+  {
+    id: 'showcase',
+    title: 'Showcase',
+    note: 'Bigger starts that fill the board with motion.',
+    ids: ['gun-battery', 'spaceship-squadron', 'pulsar-constellation', 'methuselah-garden', 'glider-fleet', 'blinker-wave'],
   },
 ];

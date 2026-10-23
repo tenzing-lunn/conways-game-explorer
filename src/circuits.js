@@ -134,6 +134,7 @@ export function buildCircuitExperiment(id, input = {}) {
 
 export function resetCircuitExperiment(experiment) {
   if (!experiment?.id) throw new Error('A circuit experiment is required.');
+  if (experiment.gates) return buildCircuitChain({ gates: experiment.gates, inputs: experiment.inputs });
   return buildCircuitExperiment(experiment.id, experiment.inputs);
 }
 
@@ -167,6 +168,199 @@ export function runCircuitToObservation(id, inputs) {
   let board = experiment.board;
   while (board.generation < experiment.observeGeneration) board = stepper.step();
   return { experiment, board, outputs: readCircuitOutputs(experiment, board) };
+}
+
+/**
+ * Gate chaining. Gates sit side by side on the CakeML 150-cell tile grid with
+ * no terminator between them, so each gate's eastbound output LWSS train is
+ * the next gate's input A. Measured on this engine (see
+ * docs/circuit-research-handoff.md and the chain findings): every gate emits
+ * output packets in the same lane (tile rows 71-74), with the same 30-cell /
+ * 60-generation spacing and the same phase as a source train entering the next
+ * tile, so no wire or phase adjustment is needed. A gate's A-to-output latency
+ * is 300 generations for AND (a transparent 150-cell wire) and 420 for OR and
+ * NOT. Fresh northbound B trains for later gates are stamped further south by
+ * half the accumulated upstream latency (LWSS moves at c/2), keeping the
+ * designed A/B alignment, and the chain is observed at 600 plus the accumulated
+ * latency of every gate but the last.
+ */
+const CHAIN_GATES = Object.freeze({
+  and: { latency: 300, arity: 2 },
+  or: { latency: 420, arity: 2 },
+  not: { latency: 420, arity: 1 },
+});
+const CHAIN_TILE = 150;
+const CHAIN_MAX_GATES = 3;
+const CHAIN_PACKETS = 14;
+const CHAIN_LANE = 70;
+const PROBE_SIZE = 12;
+
+export const circuitGateCatalog = Object.freeze([
+  { id: 'and', title: 'AND gate', description: CIRCUIT_DEFINITIONS.and.description, inputs: ['a', 'b'], chainable: true, chainPosition: 'any' },
+  { id: 'or', title: 'OR gate', description: CIRCUIT_DEFINITIONS.or.description, inputs: ['a', 'b'], chainable: true, chainPosition: 'any' },
+  { id: 'not', title: 'NOT gate', description: CIRCUIT_DEFINITIONS.not.description, inputs: ['a'], chainable: true, chainPosition: 'any' },
+  { id: 'half-adder', title: 'Binary half-adder', description: CIRCUIT_DEFINITIONS['half-adder'].description, inputs: ['a', 'b'], chainable: false, chainPosition: 'standalone' },
+].map((entry) => Object.freeze(entry)));
+
+export function validateCircuitChain(gates) {
+  if (!Array.isArray(gates) || gates.length === 0) return { ok: false, reason: 'A chain needs at least one gate.' };
+  for (const id of gates) {
+    if (id === 'half-adder') return { ok: false, reason: 'The half-adder is standalone: it has two outputs on two lanes and cannot join a chain.' };
+    if (!CHAIN_GATES[id]) return { ok: false, reason: `Unknown gate "${id}".` };
+  }
+  // Every AND/OR/NOT chain up to this length was verified by exhaustive simulation.
+  if (gates.length > CHAIN_MAX_GATES) return { ok: false, reason: `Chains longer than ${CHAIN_MAX_GATES} gates are not verified.` };
+  return { ok: true, reason: null };
+}
+
+export function getCircuitChainInputs(gates) {
+  if (!Array.isArray(gates)) throw new Error('A chain is an array of gate ids.');
+  const names = ['a'];
+  for (const id of gates) {
+    const gate = CHAIN_GATES[id];
+    if (!gate) throw new Error(`Unknown gate "${id}".`);
+    if (gate.arity === 2) names.push(String.fromCharCode(97 + names.length));
+  }
+  return names;
+}
+
+export function buildCircuitChain({ gates, inputs = {} } = {}) {
+  const validation = validateCircuitChain(gates);
+  if (!validation.ok) throw new Error(validation.reason);
+  const names = getCircuitChainInputs(gates);
+  const values = {};
+  for (const name of names) values[name] = Boolean(inputs[name]);
+  const layout = layoutChain(gates);
+
+  const board = createBoard(layout.width, layout.height);
+  const eastbound = decodePlainRawRle(INPUT_PACKET_EAST);
+  const northbound = decodePlainRawRle(INPUT_PACKET_NORTH);
+  for (const tile of layout.tiles) {
+    stampBounded(board, decodeRawRle(RAW_RLE[tile.gateId]), tile.x, tile.y);
+    for (const input of tile.inputs) {
+      if (!values[input.name]) continue;
+      for (let packet = 1; packet <= CHAIN_PACKETS; packet += 1) {
+        if (input.side === 'west') stampBounded(board, eastbound, tile.x - 5 - 30 * packet, tile.y + CHAIN_LANE);
+        else stampBounded(board, northbound, tile.x + CHAIN_LANE, tile.y + CHAIN_TILE + 10 + input.delay + 30 * (packet - 1));
+      }
+    }
+  }
+  stampBounded(board, decodeRawRle(RAW_RLE.terminator), layout.terminator.x, layout.terminator.y);
+
+  const output = { id: 'out', label: describeChainExpression(gates, names), ...layout.output, width: PROBE_SIZE, height: PROBE_SIZE };
+  const tiles = layout.tiles.map((tile) => ({
+    gateId: tile.gateId,
+    index: tile.index,
+    x: tile.x,
+    y: tile.y,
+    width: CHAIN_TILE,
+    height: CHAIN_TILE,
+    inputs: tile.inputs.map(({ name, side, x, y }) => ({ name, side, x, y })),
+  }));
+  const ports = [
+    ...tiles.flatMap((tile) => tile.inputs.map((input) => ({ type: 'input', tileIndex: tile.index, ...input }))),
+    { type: 'output', tileIndex: tiles.length - 1, ...output },
+  ];
+
+  return {
+    id: `chain:${gates.join('>')}`,
+    title: `${describeChain(gates)} chain`,
+    description: 'Gates tiled on the 150-cell grid; each output LWSS train feeds the next gate, later inputs arrive from the south with matched delays.',
+    gates: [...gates],
+    inputs: values,
+    outputs: [output],
+    observeGeneration: layout.observeGeneration,
+    finiteSignals: true,
+    wrapping: false,
+    board,
+    authoredBoard: cloneBoard(board),
+    tiles,
+    ports,
+  };
+}
+
+export function runCircuitChainToObservation(gates, inputs) {
+  const experiment = buildCircuitChain({ gates, inputs });
+  const stepper = createCircuitStepper(experiment);
+  let board = experiment.board;
+  while (board.generation < experiment.observeGeneration) board = stepper.step();
+  return { experiment, board, outputs: readCircuitOutputs(experiment, board) };
+}
+
+export function getCircuitChainTruthTable(gates) {
+  const validation = validateCircuitChain(gates);
+  if (!validation.ok) throw new Error(validation.reason);
+  const names = getCircuitChainInputs(gates);
+  const rows = [];
+  for (let mask = 0; mask < 1 << names.length; mask += 1) {
+    const inputs = {};
+    names.forEach((name, index) => { inputs[name] = Boolean(mask & (1 << index)); });
+    const { outputs } = runCircuitChainToObservation(gates, inputs);
+    rows.push({ inputs, outputs: { out: outputs[0].high === true } });
+  }
+  return rows;
+}
+
+function layoutChain(gates) {
+  const names = getCircuitChainInputs(gates);
+  const tiles = [];
+  let nextName = 1;
+  let upstreamLatency = 0;
+  let maxDelay = 0;
+  gates.forEach((gateId, index) => {
+    const x = GATE_ORIGIN.x + CHAIN_TILE * index;
+    const y = GATE_ORIGIN.y;
+    const inputs = [];
+    if (index === 0) inputs.push({ name: names[0], side: 'west', x, y: y + CHAIN_LANE + 2, delay: 0 });
+    if (CHAIN_GATES[gateId].arity === 2) {
+      const delay = chainSouthDelayCells(gateId, upstreamLatency / 2);
+      maxDelay = Math.max(maxDelay, delay);
+      inputs.push({ name: names[nextName], side: 'south', x: x + CHAIN_LANE + 2, y: y + CHAIN_TILE, delay });
+      nextName += 1;
+    }
+    tiles.push({ gateId, index, x, y, inputs });
+    upstreamLatency += CHAIN_GATES[gateId].latency;
+  });
+  const last = tiles[tiles.length - 1];
+  return {
+    tiles,
+    width: GATE_ORIGIN.x + CHAIN_TILE * (gates.length + 1) + 20,
+    height: 650 + maxDelay,
+    terminator: { x: last.x + CHAIN_TILE, y: GATE_ORIGIN.y },
+    output: { x: last.x + CHAIN_TILE, y: GATE_ORIGIN.y + 75 },
+    observeGeneration: 600 + upstreamLatency - CHAIN_GATES[last.gateId].latency,
+  };
+}
+
+// Southbound stamping offset in cells for a gate's fresh B train: half the
+// accumulated upstream latency keeps the designed A/B alignment. The OR's B
+// reaction drops still-life ash into its own B column south of the tile, which
+// destroys a train still travelling there; a lone-OR delay sweep against every
+// upstream train shape found these lattice offsets keep all 14 packets intact,
+// so an OR's train snaps down to the nearest one. Its output is widened to
+// three packets per B packet, so arriving early does not change the result.
+const OR_SOUTH_DELAYS = [0, 30, 90, 180, 270, 300, 390];
+function chainSouthDelayCells(gateId, nominal) {
+  if (gateId !== 'or') return nominal;
+  return OR_SOUTH_DELAYS.filter((delay) => delay <= nominal).pop();
+}
+
+function describeChain(gates) {
+  return gates.map((id) => id.toUpperCase()).join(' → ');
+}
+
+function describeChainExpression(gates, names) {
+  let expression = names[0].toUpperCase();
+  let nextName = 1;
+  for (const id of gates) {
+    if (id === 'not') expression = /^[A-Z]$/.test(expression) ? `NOT ${expression}` : `NOT (${expression})`;
+    else {
+      const operand = names[nextName].toUpperCase();
+      nextName += 1;
+      expression = /^[A-Z]$/.test(expression) ? `${expression} ${id.toUpperCase()} ${operand}` : `(${expression}) ${id.toUpperCase()} ${operand}`;
+    }
+  }
+  return expression;
 }
 
 function normalizeInputs(definition, input) {

@@ -2,541 +2,508 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Conway's Game Explorer</title>
-    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Life Lab</title>
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      try {
+        var lifeTheme = localStorage.getItem('life-theme');
+        if (lifeTheme === 'light' || lifeTheme === 'dark') document.documentElement.dataset.theme = lifeTheme;
+      } catch (error) {}
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/styles/base.css" />
+    <link rel="stylesheet" href="/src/styles/editor.css" />
+    <link rel="stylesheet" href="/src/styles/studio.css" />
+    <link rel="stylesheet" href="/src/styles/community.css" />
   </head>
-  <body>
-    <main class="app-shell">
-      <section id="intro-layer" class="intro-layer" aria-label="The Game of Life intro">
-        <canvas id="intro-canvas" aria-hidden="true"></canvas>
-        <div class="intro-chrome">
-          <div class="intro-scanline" aria-hidden="true"></div>
-          <div class="intro-entry" aria-label="Arcade entry">
-            <p id="intro-card-title" class="intro-title">Conway's Game of Life</p>
-            <div id="intro-profile-fields" class="intro-profile-fields" hidden>
-              <label for="intro-name">
-                <span>What's your name?</span>
-                <input id="intro-name" type="text" autocomplete="name" placeholder="Ada Lovelace" />
-              </label>
-              <label for="intro-email">
-                <span>What's your email?</span>
-                <input id="intro-email" type="email" autocomplete="email" placeholder="ada@example.com" />
-              </label>
-            </div>
-            <div class="intro-actions">
-              <button id="intro-start" class="intro-start" type="button" disabled>
-                <span id="intro-prompt">LOADING</span>
-              </button>
-              <button id="intro-skip" class="intro-skip" type="button">Develop</button>
-            </div>
-          </div>
-          <p id="intro-help" class="intro-help">Explore the rules, then build a pattern of your own.</p>
-        </div>
-      </section>
+  <body data-mode="playground" data-studio-view="project" data-tool="draw">
+    <svg class="icon-sprite" aria-hidden="true" focusable="false">
+      <defs>
+        <symbol id="i-brand" viewBox="0 0 16 16"><rect x="6" y="1" width="4" height="4" rx="0.5"/><rect x="11" y="6" width="4" height="4" rx="0.5"/><rect x="1" y="11" width="4" height="4" rx="0.5"/><rect x="6" y="11" width="4" height="4" rx="0.5"/><rect x="11" y="11" width="4" height="4" rx="0.5"/></symbol>
+        <symbol id="i-draw" viewBox="0 0 16 16"><path d="M11.2 2.3a1.4 1.4 0 0 1 2 2L5.5 12l-3 .8.8-3z"/><path d="M9.8 3.8l2.4 2.4"/></symbol>
+        <symbol id="i-select" viewBox="0 0 16 16"><path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11"/><path d="M7 2.5h2M7 13.5h2M2.5 7v2M13.5 7v2" stroke-dasharray="1 1"/></symbol>
+        <symbol id="i-stamp" viewBox="0 0 16 16"><path d="M6 2.5h4v3.5l1 1.5h2.5v3h-11v-3H5l1-1.5z"/><path d="M4 13.5h8"/></symbol>
+        <symbol id="i-pan" viewBox="0 0 16 16"><path d="M5.5 8V3.3a1 1 0 0 1 2 0V7M7.5 3V2.3a1 1 0 0 1 2 0V7M9.5 3.3a1 1 0 0 1 2 0V7M11.5 5.3a1 1 0 0 1 2 0V10a4.5 4.5 0 0 1-4.5 4.5H8a4 4 0 0 1-3.2-1.6L2.6 9.9a1 1 0 0 1 1.6-1.2L5.5 10"/></symbol>
+        <symbol id="i-undo" viewBox="0 0 16 16"><path d="M5.5 3.5L2.5 6.5l3 3"/><path d="M2.5 6.5H10a3.5 3.5 0 0 1 0 7H7"/></symbol>
+        <symbol id="i-redo" viewBox="0 0 16 16"><path d="M10.5 3.5l3 3-3 3"/><path d="M13.5 6.5H6a3.5 3.5 0 0 0 0 7h3"/></symbol>
+        <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="8" r="1" fill="currentColor" stroke="none"/></symbol>
+        <symbol id="i-play" viewBox="0 0 16 16"><path d="M4.5 3v10l8-5z" fill="currentColor" stroke="none"/></symbol>
+        <symbol id="i-pause" viewBox="0 0 16 16"><rect x="4" y="3" width="2.5" height="10" fill="currentColor" stroke="none"/><rect x="9.5" y="3" width="2.5" height="10" fill="currentColor" stroke="none"/></symbol>
+        <symbol id="i-step" viewBox="0 0 16 16"><path d="M3.5 3v10l7-5z" fill="currentColor" stroke="none"/><path d="M12.5 3v10"/></symbol>
+        <symbol id="i-reset" viewBox="0 0 16 16"><path d="M3 8a5 5 0 1 0 1.5-3.6"/><path d="M3 2.5v3h3"/></symbol>
+        <symbol id="i-chevron" viewBox="0 0 16 16"><path d="M4 6.5l4 4 4-4"/></symbol>
+        <symbol id="i-minus" viewBox="0 0 16 16"><path d="M3.5 8h9"/></symbol>
+        <symbol id="i-plus" viewBox="0 0 16 16"><path d="M3.5 8h9M8 3.5v9"/></symbol>
+        <symbol id="i-fit" viewBox="0 0 16 16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/><rect x="5.5" y="5.5" width="5" height="5"/></symbol>
+        <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7v4M8 5.2v.1"/></symbol>
+        <symbol id="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M3.4 12.6l1.3-1.3M11.3 4.7l1.3-1.3"/></symbol>
+        <symbol id="i-moon" viewBox="0 0 16 16"><path d="M13 9.6A5.5 5.5 0 0 1 6.4 3a5.5 5.5 0 1 0 6.6 6.6z"/></symbol>
+        <symbol id="i-close" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+        <symbol id="i-back" viewBox="0 0 16 16"><path d="M7 3.5L2.5 8 7 12.5M3 8h10.5"/></symbol>
+        <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/></symbol>
+        <symbol id="i-rotate-left" viewBox="0 0 16 16"><path d="M5.5 5.5H2.5v-3"/><path d="M2.8 5.5A5.5 5.5 0 1 1 2.5 8"/></symbol>
+        <symbol id="i-rotate-right" viewBox="0 0 16 16"><path d="M10.5 5.5h3v-3"/><path d="M13.2 5.5A5.5 5.5 0 1 0 13.5 8"/></symbol>
+        <symbol id="i-flip" viewBox="0 0 16 16"><path d="M8 2v12" stroke-dasharray="2 1.5"/><path d="M6 4.5L2.5 8 6 11.5zM10 4.5L13.5 8 10 11.5z"/></symbol>
+        <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></symbol>
+        <symbol id="i-user" viewBox="0 0 16 16"><circle cx="8" cy="5.5" r="3"/><path d="M2.5 14a5.5 5.5 0 0 1 11 0"/></symbol>
+        <symbol id="i-star" viewBox="0 0 16 16"><path d="M8 2l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.8l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/></symbol>
+        <symbol id="i-share" viewBox="0 0 16 16"><path d="M8 10V2.5M5 5.5l3-3 3 3"/><path d="M3 8.5v4a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-4"/></symbol>
+        <symbol id="i-remix" viewBox="0 0 16 16"><circle cx="4" cy="3.5" r="1.5"/><circle cx="4" cy="12.5" r="1.5"/><circle cx="12" cy="6" r="1.5"/><path d="M4 5v6M12 7.5a4 4 0 0 1-4 3.5H4"/></symbol>
+        <symbol id="i-dice" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><circle cx="5.5" cy="5.5" r=".9" fill="currentColor" stroke="none"/><circle cx="10.5" cy="5.5" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="5.5" cy="10.5" r=".9" fill="currentColor" stroke="none"/><circle cx="10.5" cy="10.5" r=".9" fill="currentColor" stroke="none"/></symbol>
+        <symbol id="i-trash" viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 2.5h3M4 4.5l.7 8.5a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-8.5"/></symbol>
+        <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></symbol>
+        <symbol id="i-paste" viewBox="0 0 16 16"><rect x="3" y="3.5" width="10" height="10" rx="1"/><path d="M6 3.5v-1h4v1"/><path d="M6 8.5h4M6 11h2.5"/></symbol>
+        <symbol id="i-deselect" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1" stroke-dasharray="2 1.5"/><path d="M6 6l4 4M10 6l-4 4"/></symbol>
+        <symbol id="i-grid" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 8h11M8 2.5v11"/></symbol>
+        <symbol id="i-sliders" viewBox="0 0 16 16"><path d="M2.5 4.5h7M12.5 4.5h1M2.5 11.5h2M7.5 11.5h6"/><circle cx="11" cy="4.5" r="1.5"/><circle cx="6" cy="11.5" r="1.5"/></symbol>
+        <symbol id="i-keyboard" viewBox="0 0 16 16"><rect x="1.5" y="4" width="13" height="8" rx="1"/><path d="M4 6.5h1M6.5 6.5h1M9 6.5h1M11.5 6.5h1M4 9.5h8"/></symbol>
+        <symbol id="i-import" viewBox="0 0 16 16"><path d="M8 2.5v8M5 7.5l3 3 3-3"/><path d="M3 11v2a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-2"/></symbol>
+        <symbol id="i-export" viewBox="0 0 16 16"><path d="M8 10.5v-8M5 5.5l3-3 3 3"/><path d="M3 11v2a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-2"/></symbol>
+        <symbol id="i-eraser" viewBox="0 0 16 16"><path d="M9.5 2.5l4 4-6 6H5l-2.5-2.5z"/><path d="M6 7l3.5 3.5M5 12.5h8.5"/></symbol>
+        <symbol id="i-logic" viewBox="0 0 16 16"><path d="M2.5 5h3M2.5 11h3M5.5 3.5h3a4.5 4.5 0 0 1 0 9h-3z"/><path d="M13 8h.5"/></symbol>
+        <symbol id="i-pattern" viewBox="0 0 16 16"><rect x="6" y="2.5" width="4" height="4"/><rect x="2.5" y="9.5" width="4" height="4"/><rect x="9.5" y="9.5" width="4" height="4"/></symbol>
+      </defs>
+    </svg>
 
-      <canvas id="world" aria-label="Conway's Game of Life board"></canvas>
-
-      <section id="playground-tutorial" class="playground-tutorial" aria-label="Playground tutorial" hidden>
-        <div class="tutorial-arcade-screen">
-          <div class="tutorial-mini-grid" aria-hidden="true">
-            <span></span><span class="live"></span><span></span>
-            <span class="live"></span><span class="live focus"></span><span class="live"></span>
-            <span></span><span class="live"></span><span></span>
-          </div>
-          <div class="tutorial-copy">
-            <p id="playground-tutorial-kicker">Rule 1 / 4</p>
-            <h2 id="playground-tutorial-title">Welcome to Conway's Game: the rules are alive</h2>
-            <p id="playground-tutorial-body">Every square is a tiny creature. Click through the rules, then you land in the playground.</p>
-          </div>
-          <div class="tutorial-actions">
-            <button id="playground-tutorial-skip" type="button">Skip</button>
-            <button id="playground-tutorial-next" class="primary" type="button">Next</button>
-          </div>
-        </div>
-      </section>
-
-      <aside class="arcade-rail" aria-label="Arcade workspace selector">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true"></span>
-          <div>
-            <h1>Life Lab</h1>
-            <p>Conway’s Game of Life</p>
-          </div>
-        </div>
-
-        <div class="player-card" aria-label="Current player">
-          <span>Player</span>
-          <strong id="player-name">Guest Builder</strong>
-          <small id="player-meta">Play around or create a profile</small>
-        </div>
-
-        <nav class="workspace-dock" aria-label="Workspaces">
-          <button id="mode-playground" class="active" type="button" aria-current="page">
-            <span class="button-icon" aria-hidden="true">✎</span>
-            <span>Playground</span>
-            <small>Draw and run</small>
-          </button>
-          <button id="mode-dev" type="button">
-            <span class="button-icon" aria-hidden="true">⚙</span>
-            <span>Dev Studio</span>
-            <small>Build logic</small>
-          </button>
-          <button id="mode-community" type="button">
-            <span class="button-icon" aria-hidden="true">★</span>
-            <span>Community</span>
-            <small>Feed and remixes</small>
-          </button>
+    <div id="app" class="app">
+      <header id="top-bar" class="top-bar">
+        <a id="brand" class="brand" href="/" aria-label="Life Lab home">
+          <svg class="icon brand-mark" aria-hidden="true"><use href="#i-brand" /></svg>
+          <span class="brand-name">Life Lab</span>
+        </a>
+        <nav class="mode-nav" aria-label="Sections">
+          <button id="mode-playground" class="mode-tab" type="button" aria-current="page">Playground</button>
+          <button id="mode-studio" class="mode-tab" type="button">Studio</button>
+          <button id="mode-community" class="mode-tab" type="button">Community</button>
         </nav>
-
-        <button id="account-entry" class="account-entry" type="button">Account</button>
-
-      </aside>
-
-      <section class="rail-block transport-block" aria-label="Simulation controls">
-        <div class="transport">
-          <button id="play-toggle" class="primary" type="button" aria-label="Play simulation">
-            <span class="button-icon" aria-hidden="true">▶</span>
-            <span id="play-label">Play</span>
+        <button id="top-menu-toggle" class="icon-button mobile-only" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="top-menu" aria-label="More options">
+          <svg class="icon" aria-hidden="true"><use href="#i-more" /></svg>
+        </button>
+        <div id="top-menu" class="top-actions" role="group" aria-label="Theme and account">
+          <button id="theme-toggle" class="icon-button" type="button" aria-label="Switch to dark theme" aria-pressed="false">
+            <svg class="icon icon-sun" aria-hidden="true"><use href="#i-sun" /></svg>
+            <svg class="icon icon-moon" aria-hidden="true"><use href="#i-moon" /></svg>
+            <span class="mobile-only menu-label">Theme</span>
           </button>
-          <button id="step" type="button" aria-label="Step one generation">
-            <span class="button-icon" aria-hidden="true">↦</span>
-            <span>Step</span>
+          <button id="account-entry" class="button button-quiet" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-user" /></svg>
+            <span id="account-entry-label">Sign in</span>
           </button>
-          <button id="clear" type="button" aria-label="Clear board">
-            <span class="button-icon" aria-hidden="true">⌫</span>
-            <span>Clear</span>
-          </button>
-          <button id="randomize" type="button" aria-label="Create random live cell soup">
-            <span class="button-icon" aria-hidden="true">✦</span>
-            <span>Soup</span>
-          </button>
-          <button id="undo" type="button" aria-label="Undo last edit">Undo</button>
-          <button id="redo" type="button" aria-label="Redo last edit">Redo</button>
-          <button id="reset-start" type="button" aria-label="Reset to saved starting state">Reset</button>
-          <button id="promote-state" type="button" aria-label="Use the current frame as the saved starting state">Use as start</button>
-          <button id="fit-board" type="button" aria-label="Fit board to view">Fit</button>
         </div>
-        <div class="transport-tempo" aria-label="Tempo controls">
-          <label for="speed">
-            <span>Tempo</span>
-            <strong id="speed-label">10 gen/s</strong>
-          </label>
-          <div class="tempo-stepper">
-            <button type="button" data-speed-step="-1" aria-label="Slow down">-</button>
-            <input id="speed" type="range" min="1" max="40" value="10" />
-            <button type="button" data-speed-step="1" aria-label="Speed up">+</button>
+      </header>
+
+      <!-- STUDIO: project header -->
+      <div id="project-header" class="project-header" hidden>
+        <button id="projects-back" class="button button-quiet" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-back" /></svg>
+          <span class="desktop-only">Projects</span>
+        </button>
+        <input id="project-title" class="project-title" type="text" value="Untitled project" aria-label="Project title" spellcheck="false" autocomplete="off" />
+        <span id="save-state" class="save-state desktop-only" role="status">Saved on this device</span>
+        <div class="project-actions">
+          <button id="inspector-toggle" class="button mobile-only" type="button" aria-controls="inspector" aria-expanded="false">
+            <svg class="icon" aria-hidden="true"><use href="#i-sliders" /></svg>
+            <span>Experiment</span>
+          </button>
+          <button id="save-project" class="button" type="button">Save</button>
+          <button id="publish-project" class="button button-primary desktop-only" type="button">Publish</button>
+          <button id="project-menu-toggle" class="icon-button desktop-only" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="project-menu" aria-label="Project options">
+            <svg class="icon" aria-hidden="true"><use href="#i-more" /></svg>
+          </button>
+          <div id="project-menu" class="menu" role="menu" hidden>
+            <button id="unpublish-project" type="button" role="menuitem">Unpublish</button>
+            <button id="archive-project" type="button" role="menuitem">Archive project</button>
+            <button id="delete-project" class="menu-danger" type="button" role="menuitem">Delete project</button>
           </div>
-          <span id="zoom-label" class="sr-only">100%</span>
-          <input id="zoom" class="sr-only" type="range" min="18" max="360" value="100" tabindex="-1" />
-          <input id="age-colors" class="sr-only" type="checkbox" checked tabindex="-1" />
         </div>
-      </section>
-
-      <button id="tool-drawer-toggle" class="tool-drawer-toggle" type="button" aria-controls="tool-panel" aria-expanded="true">
-        <span aria-hidden="true">▣</span>
-        <span data-tool-drawer-label>Open Tools</span>
-      </button>
-
-      <aside id="tool-panel" class="panel" aria-label="Explorer panel">
-        <div class="panel-header">
-          <h2>Tools</h2>
-          <button id="tool-drawer-close" class="drawer-close" type="button">Close Tools</button>
-        </div>
-
-        <details class="panel-section draw-panel playground-panel collapsible-panel" open>
-          <summary><h2>Cells</h2></summary>
-          <div class="segmented tool-segmented" role="radiogroup" aria-label="Drawing tool">
-            <button class="active" type="button" data-tool="draw" role="radio" aria-checked="true">
-              <span class="button-icon" aria-hidden="true">✎</span>
-              <span>Draw</span>
-            </button>
-            <button type="button" data-tool="pan" role="radio" aria-checked="false">
-              <span class="button-icon" aria-hidden="true">✥</span>
-              <span>Pan</span>
-            </button>
-            <button type="button" data-tool="stamp" role="radio" aria-checked="false">
-              <span class="button-icon" aria-hidden="true">▣</span>
-              <span data-stamp-label>Stamp</span>
-            </button>
-            <button type="button" data-tool="select" role="radio" aria-checked="false">Select</button>
-          </div>
-          <p class="hint">Draw paints or erases paused live cells. Pan moves the board. Stamp places repeated copies.</p>
-          <div class="selection-controls" role="group" aria-label="Selection controls">
-            <button type="button" data-selection-command="copy">Copy</button>
-            <button type="button" data-selection-command="paste">Paste</button>
-            <button type="button" data-selection-command="rotate">Rotate selection</button>
-            <button type="button" data-selection-command="reflect">Reflect selection</button>
-            <button type="button" data-selection-command="left" aria-label="Move selection left">←</button>
-            <button type="button" data-selection-command="up" aria-label="Move selection up">↑</button>
-            <button type="button" data-selection-command="down" aria-label="Move selection down">↓</button>
-            <button type="button" data-selection-command="right" aria-label="Move selection right">→</button>
-            <button type="button" data-selection-command="clear">Deselect</button>
-          </div>
-          <p id="stamp-summary" class="stamp-summary" hidden></p>
-          <button id="stamp-off" class="stamp-off" type="button" hidden>Turn Stamp Off</button>
-          <div class="stamp-controls" aria-label="Stamp transform controls">
-            <button id="stamp-rotate-left" type="button" aria-label="Rotate stamp left">↶</button>
-            <span id="stamp-transform-label">0°</span>
-            <button id="stamp-rotate-right" type="button" aria-label="Rotate stamp right">↷</button>
-            <button id="stamp-flip" type="button" aria-pressed="false">Flip</button>
-          </div>
-        </details>
-
-        <section id="dev-panel" class="panel-section dev-panel" aria-label="Dev Studio workspace">
-          <div class="dev-start-screen" aria-label="Dev Studio launcher">
-            <div class="dev-start-copy">
-              <div class="section-heading">
-                <h2>Dev Studio</h2>
-                <span id="dev-dirty-state">Saved</span>
-              </div>
-              <div class="profile-card">
-                <strong id="dev-profile-name">Local Builder</strong>
-                <span id="dev-profile-meta">Create a profile to track designs.</span>
-              </div>
-              <p class="hint">Start with a blank design or a named project. The board opens clean, and the tool drawer can pop in when you need stamps, lessons, or settings.</p>
-              <div class="dev-launch-actions">
-                <button id="dev-create-design" class="primary" type="button">Create New Design</button>
-                <button id="dev-create-project" type="button">Create New Project</button>
-              </div>
-            </div>
-
-            <aside class="dev-start-side" aria-label="Dev profile and saved designs">
-              <div class="profile-stats" aria-label="Design stats">
-                <div><strong id="dev-design-count">0</strong><span>Designs</span></div>
-                <div><strong id="dev-draft-count">0</strong><span>Drafts</span></div>
-                <div><strong id="dev-published-count">0</strong><span>Published</span></div>
-                <div><strong id="dev-starred-count">0</strong><span>Starred</span></div>
-              </div>
-              <div class="community-form compact-form" aria-label="Dev profile">
-                <label for="profile-name">Name</label>
-                <input id="profile-name" type="text" autocomplete="name" placeholder="Ada Lovelace" />
-                <label for="profile-email">Email</label>
-                <input id="profile-email" type="email" autocomplete="email" placeholder="ada@example.com" />
-                <button id="save-profile" type="button">Create Profile</button>
-              </div>
-              <div class="community-list-block">
-                <h3>Past Designs</h3>
-                <div id="dev-project-list" class="project-list"></div>
-              </div>
-            </aside>
-          </div>
-
-          <div class="dev-toolbox" aria-label="Dev project tools">
-            <details class="panel-section dev-design-panel collapsible-panel" open>
-              <summary><h2>Design</h2><span id="dev-session-state">New</span></summary>
-              <label for="dev-design-title">Name</label>
-              <input id="dev-design-title" type="text" placeholder="Untitled design" />
-              <label for="dev-design-description">Description</label>
-              <textarea id="dev-design-description" rows="3" placeholder="What does this design teach or do?"></textarea>
-              <label for="dev-design-tags">Tags</label>
-              <input id="dev-design-tags" type="text" placeholder="glider, logic, oscillator" />
-              <label for="dev-design-attribution">Attribution</label>
-              <textarea id="dev-design-attribution" rows="2" placeholder="Credit a source or inspiration"></textarea>
-              <label for="dev-design-tutorial">Tutorial reference</label>
-              <input id="dev-design-tutorial" type="text" placeholder="Optional tutorial URL or identifier" />
-              <div class="dev-preview-heading">
-                <span>Default camera preview</span>
-                <output id="dev-preview-mode">Fit pattern</output>
-              </div>
-              <div id="dev-preview" class="dev-publish-preview" role="img" aria-label="Add live cells to generate a publishing preview"></div>
-              <p id="dev-preview-description" class="field-help">The published card will frame all live cells.</p>
-              <div class="button-row dev-preview-actions" aria-label="Default camera framing">
-                <button id="preview-fit-pattern" type="button" aria-pressed="true">Fit Pattern</button>
-                <button id="preview-use-view" type="button" aria-pressed="false">Use Current View</button>
-              </div>
-              <div class="button-row">
-                <button id="save-design" type="button">Save Draft</button>
-                <button id="publish-design" type="button">Publish</button>
-              </div>
-              <div class="button-row dev-lifecycle-actions">
-                <button id="unpublish-design" type="button">Unpublish</button>
-                <button id="archive-design" type="button">Archive</button>
-                <button id="delete-design" class="danger" type="button">Delete</button>
-              </div>
-            </details>
-
-            <details class="panel-section dev-version-panel collapsible-panel" open>
-              <summary><h2>Version History</h2><span id="dev-version-count">0</span></summary>
-              <div id="dev-version-list" class="version-list"></div>
-            </details>
-
-            <details class="panel-section dev-command-strip collapsible-panel">
-              <summary><h2>Logic Kit</h2><span>Signals</span></summary>
-              <div class="section-heading">
-                <h2>Prebuilt Things</h2>
-                <span>Stampable</span>
-              </div>
-              <div class="dev-grid">
-                <button type="button" data-dev-component="glider"><span>Signal</span><small>moving bit</small></button>
-                <button type="button" data-dev-component="gosper-gun"><span>Clock</span><small>glider stream</small></button>
-                <button type="button" data-dev-component="eater"><span>Stop</span><small>absorbs signal</small></button>
-                <button type="button" data-dev-component="collision-pair"><span>Collide</span><small>two signals</small></button>
-              </div>
-              <div id="circuit-experiments" class="logic-grid" aria-label="Verified circuit experiments">
-                <p class="hint">Verified finite-signal experiments. Toggle inputs, then run until the marked output settles.</p>
-              </div>
-              <div class="dev-actions" aria-label="Claim checks">
-                <button type="button" data-dev-claim="period">Check period</button>
-                <button type="button" data-dev-claim="drift">Check drift</button>
-                <button type="button" data-dev-claim="population">Snapshot</button>
-              </div>
-              <p id="dev-output" class="dev-output">Choose a component, stamp it, then run a claim check.</p>
-            </details>
-
-            <details class="panel-section dev-inspector collapsible-panel">
-              <summary><h2>Grid</h2><span id="dev-grid-summary">300 x 200</span></summary>
-              <section class="inspector-block">
-                <div class="section-heading">
-                  <h2>Grid</h2>
-                </div>
-                <label for="grid-preset">Size</label>
-                <select id="grid-preset">
-                  <option value="small">Small 120 x 80</option>
-                  <option value="medium" selected>Medium 300 x 200</option>
-                  <option value="large">Large 420 x 280</option>
-                  <option value="custom">Custom</option>
-                </select>
-                <div class="number-pair">
-                  <label for="grid-width">Width</label>
-                  <input id="grid-width" type="number" min="40" max="600" value="300" />
-                  <label for="grid-height">Height</label>
-                  <input id="grid-height" type="number" min="40" max="600" value="200" />
-                </div>
-                <button id="apply-grid-size" class="wide-action" type="button">Apply Grid</button>
-                <label class="toggle-row" for="wrap-toggle">
-                  <span>Wrapped edges</span>
-                  <input id="wrap-toggle" type="checkbox" checked />
-                </label>
-              </section>
-            </details>
-
-            <details class="panel-section dev-inspector collapsible-panel">
-              <summary><h2>Style</h2><span id="dev-style-summary">square cells</span></summary>
-              <section class="inspector-block">
-                <div class="section-heading">
-                  <h2>Style</h2>
-                </div>
-                <label for="render-style">Cell style</label>
-                <select id="render-style">
-                  <option value="square">Crisp square</option>
-                  <option value="rounded">Rounded pixel</option>
-                  <option value="glow">Glowing cell</option>
-                  <option value="dot">Minimal dot</option>
-                </select>
-                <label for="trail-intensity">Trails</label>
-                <select id="trail-intensity">
-                  <option value="off">Off</option>
-                  <option value="low">Low</option>
-                  <option value="medium" selected>Medium</option>
-                  <option value="high">High</option>
-                </select>
-                <div class="color-grid">
-                  <label for="background-color">Background<input id="background-color" type="color" value="#07090f" /></label>
-                  <label for="grid-color">Grid<input id="grid-color" type="color" value="#334155" /></label>
-                  <label for="live-cell-color">Cells<input id="live-cell-color" type="color" value="#5eead4" /></label>
-                  <label for="trail-cell-color">Trails<input id="trail-cell-color" type="color" value="#38bdf8" /></label>
-                  <label for="accent-color">Accent<input id="accent-color" type="color" value="#2dd4bf" /></label>
-                  <label for="selection-color">Selection<input id="selection-color" type="color" value="#fbbf24" /></label>
-                </div>
-              </section>
-            </details>
-
-            <details class="panel-section dev-inspector collapsible-panel">
-              <summary><h2>Tutorials</h2><span id="tutorial-count">0</span></summary>
-              <section class="inspector-block">
-                <div class="section-heading">
-                  <h2>Tutorials</h2>
-                </div>
-                <div id="tutorial-groups" class="pattern-tabs compact-tabs" role="tablist" aria-label="Tutorial groups"></div>
-                <div id="tutorial-list" class="tutorial-list"></div>
-                <p id="tutorial-output" class="dev-output">Load a lesson to study, modify, and save as a draft.</p>
-              </section>
-            </details>
-          </div>
-        </section>
-
-        <section id="community-panel" class="panel-section community-panel" aria-label="Community workspace">
-          <div class="community-layout">
-            <aside class="community-sidebar">
-              <div class="section-heading">
-                <h2>Community</h2>
-                <span id="community-count">0 builds</span>
-              </div>
-
-              <div id="community-auth" class="community-auth" aria-label="Cloud account" hidden>
-                <div class="community-auth-status">
-                  <span id="community-cloud-status">Cloud: local</span>
-                  <button id="community-sign-out" type="button" hidden>Sign out</button>
-                </div>
-                <div class="community-auth-form">
-                  <input id="community-auth-name" type="text" autocomplete="name" placeholder="Display name" />
-                  <input id="community-auth-email" type="email" autocomplete="email" placeholder="email@example.com" />
-                  <input id="community-auth-password" type="password" autocomplete="current-password" minlength="12" maxlength="128" placeholder="Password (12+ characters)" />
-                  <div class="community-auth-actions">
-                    <button id="community-sign-up" type="button">Create account</button>
-                    <button id="community-sign-in" type="button">Sign in</button>
-                  </div>
-                </div>
-                <p id="community-auth-output">Use an email and password to sync local drafts.</p>
-              </div>
-
-              <div class="community-form" aria-label="Save current creation">
-                <label for="creation-title">Design title</label>
-                <input id="creation-title" type="text" placeholder="Glider clock" />
-                <label for="creation-description">Description</label>
-                <textarea id="creation-description" spellcheck="true" placeholder="What does this pattern teach or do?"></textarea>
-                <label for="creation-tags">Tags</label>
-                <input id="creation-tags" type="text" placeholder="glider, logic, oscillator" />
-                <div class="button-row">
-                  <button id="save-creation" type="button">Save Draft</button>
-                  <button id="publish-creation" type="button">Publish</button>
-                </div>
-                <button id="copy-share-payload" class="wide-action" type="button">Copy Share Link</button>
-              </div>
-
-              <p id="community-output" class="dev-output">Browse famous designs, open one, then copy or remix it.</p>
-            </aside>
-
-            <section class="community-stream" aria-label="Community design stream">
-              <div class="stream-toolbar">
-                <input id="community-search" type="search" placeholder="Search designs, tags, or authors" />
-                <div class="custom-select" data-custom-select="community-filter">
-                  <button id="community-filter-button" type="button" aria-haspopup="listbox" aria-expanded="false">
-                    <span id="community-filter-label">All streams</span>
-                    <span aria-hidden="true">⌄</span>
-                  </button>
-                  <div id="community-filter-menu" class="custom-select-menu" role="listbox" aria-label="Community feed filter">
-                    <button type="button" role="option" data-community-filter-value="all" aria-selected="true">All streams</button>
-                    <button type="button" role="option" data-community-filter-value="famous" aria-selected="false">Famous</button>
-                    <button type="button" role="option" data-community-filter-value="trending" aria-selected="false">Trending</button>
-                    <button type="button" role="option" data-community-filter-value="new" aria-selected="false">New</button>
-                    <button type="button" role="option" data-community-filter-value="remixes" aria-selected="false">Remixes</button>
-                    <button type="button" role="option" data-community-filter-value="favorites" aria-selected="false">Favorites</button>
-                  </div>
-                </div>
-                <select id="community-filter" class="sr-only" aria-label="Community feed filter" tabindex="-1">
-                  <option value="all">All streams</option>
-                  <option value="famous">Famous</option>
-                  <option value="trending">Trending</option>
-                  <option value="new">New</option>
-                  <option value="remixes">Remixes</option>
-                  <option value="favorites">Favorites</option>
-                </select>
-              </div>
-              <div class="community-list-block">
-                <h3>Famous Designs</h3>
-                <div id="community-famous-list" class="community-list community-feed"></div>
-              </div>
-              <div class="community-list-block">
-                <h3>Trending</h3>
-                <div id="trending-list" class="community-list community-feed"></div>
-              </div>
-              <div class="community-list-block">
-                <h3>New Designs</h3>
-                <div id="community-list" class="community-list community-feed"></div>
-              </div>
-              <div class="community-list-block">
-                <h3>Remixes</h3>
-                <div id="community-remix-list" class="community-list community-feed"></div>
-              </div>
-            </section>
-
-            <aside class="community-detail" aria-label="Selected community design">
-              <div id="community-detail" class="detail-card"></div>
-              <div class="comment-box">
-                <label for="comment-body">Comment</label>
-                <textarea id="comment-body" spellcheck="true" placeholder="Leave a note, question, or remix idea."></textarea>
-                <button id="post-comment" type="button">Comment</button>
-              </div>
-            </aside>
-          </div>
-        </section>
-
-        <details class="panel-section library-panel playground-panel collapsible-panel" open>
-          <summary><h2>Pattern Library</h2><span id="preset-count"></span></summary>
-          <p class="hint">Drag a card onto the board, or click a card to turn Stamp on for repeated placement.</p>
-          <div id="pattern-tabs" class="pattern-tabs" role="tablist" aria-label="Pattern groups"></div>
-          <div id="presets" class="preset-list"></div>
-        </details>
-
-        <details class="panel-section graph-panel playground-panel collapsible-panel">
-          <summary><h2>Population Graph</h2></summary>
-          <canvas id="population-chart" width="300" height="92" aria-label="Population history chart"></canvas>
-          <p class="hint">Tracks live cell count over time so you can spot collapse, growth, and repeating rhythms.</p>
-        </details>
-
-        <details class="panel-section clipboard-panel playground-panel collapsible-panel">
-          <summary><h2>Import / Export RLE</h2></summary>
-          <p class="hint">Add RLE text from a Life pattern page, then turn it into a reusable Stamp. Export copies the current board as RLE text.</p>
-          <textarea id="rle-field" spellcheck="false" placeholder="RLE text goes here, then choose Stamp RLE"></textarea>
-          <div class="button-row">
-            <button id="import-rle" type="button">Stamp RLE</button>
-            <button id="export-rle" type="button">Export Board</button>
-          </div>
-        </details>
-
-        <details class="panel-section stats stats-panel playground-panel collapsible-panel">
-          <summary><h2>World Stats</h2></summary>
-          <dl>
-            <div>
-              <dt>Generation</dt>
-              <dd id="generation">0</dd>
-            </div>
-            <div>
-              <dt>Population</dt>
-              <dd id="population">0</dd>
-            </div>
-            <div>
-              <dt>Density</dt>
-              <dd id="density">0%</dd>
-            </div>
-            <div>
-              <dt>Board</dt>
-              <dd id="board-size">300 × 200</dd>
-            </div>
-          </dl>
-        </details>
-
-      </aside>
-
-      <dialog id="account-dialog" class="account-dialog" aria-labelledby="account-dialog-title">
-        <form method="dialog" class="account-dialog-card">
-          <div class="account-dialog-heading">
-            <div><span class="eyebrow">Life Lab account</span><h2 id="account-dialog-title">Keep building</h2></div>
-            <button id="account-close" value="cancel" type="submit" aria-label="Close account dialog">×</button>
-          </div>
-          <p id="account-context">Sign in without leaving your current workspace.</p>
-          <div id="account-tabs" class="account-tabs" role="tablist" aria-label="Account action">
-            <button type="button" data-account-mode="sign-in" role="tab" aria-selected="true">Sign in</button>
-            <button type="button" data-account-mode="sign-up" role="tab" aria-selected="false">Create account</button>
-            <button type="button" data-account-mode="recover" role="tab" aria-selected="false">Recover</button>
-          </div>
-          <div id="account-fields" class="account-fields">
-            <label data-account-field="name">Display name<input id="account-name" type="text" autocomplete="name" /></label>
-            <label>Email<input id="account-email" type="email" autocomplete="email" /></label>
-            <label data-account-field="recovery">Recovery key<input id="account-recovery-key" type="text" autocomplete="off" /></label>
-            <label>Password<input id="account-password" type="password" minlength="12" maxlength="128" autocomplete="current-password" /></label>
-          </div>
-          <p id="account-output" class="account-output" role="status">Passwords must contain 12 to 128 characters.</p>
-          <output id="account-recovery-output" class="account-recovery-output" hidden></output>
-          <button id="account-submit" class="primary" type="button">Sign in</button>
-          <section id="account-security" class="account-security" hidden>
-            <h3>Security</h3>
-            <p>Recovery keys are shown once. Life Lab cannot email a recovery key.</p>
-            <button id="account-create-recovery" type="button">Generate recovery key</button>
-            <label>Type DELETE to confirm<input id="account-delete-confirmation" type="text" autocomplete="off" /></label>
-            <button id="account-delete" class="danger" type="button">Delete account and publications</button>
-          </section>
-        </form>
-      </dialog>
-
-      <div class="hud" aria-live="polite">
-        <span id="active-note">Blank board ready. Draw cells, drag in a pattern, then press Play.</span>
       </div>
+      <!-- /STUDIO -->
 
-      <div id="feedback-toast" class="feedback-toast" role="status" aria-live="polite"></div>
-    </main>
+      <main id="editor" class="editor">
+        <aside id="rail" class="rail" aria-label="Patterns">
+          <div id="rail-handle" class="rail-handle mobile-only" aria-hidden="true"></div>
+          <div class="rail-head">
+            <h2 id="rail-title" class="rail-title">Patterns</h2>
+            <button id="rail-close" class="icon-button mobile-only" type="button" aria-label="Close patterns">
+              <svg class="icon" aria-hidden="true"><use href="#i-close" /></svg>
+            </button>
+          </div>
+          <!-- STUDIO: rail kind tabs -->
+          <div id="rail-kind-tabs" class="kind-tabs" role="tablist" aria-label="Component kind" hidden>
+            <button type="button" role="tab" data-rail-tab="patterns" aria-selected="true">Patterns</button>
+            <button type="button" role="tab" data-rail-tab="logic" aria-selected="false">Logic</button>
+          </div>
+          <!-- /STUDIO -->
+          <section id="pattern-panel" class="rail-panel">
+            <label class="search-field">
+              <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
+              <input id="pattern-search" type="search" placeholder="Search patterns" aria-label="Search patterns" autocomplete="off" />
+            </label>
+            <div id="pattern-tabs" class="pattern-tabs" role="tablist" aria-label="Pattern groups"></div>
+            <div id="pattern-list" class="card-list" role="list"></div>
+          </section>
+          <!-- STUDIO: logic panel -->
+          <section id="logic-panel" class="rail-panel" hidden>
+            <p class="rail-note">Pick a gate. Flip its inputs in the inspector, then run until the output settles.</p>
+            <div id="logic-list" class="card-list" role="list"></div>
+          </section>
+          <!-- /STUDIO -->
+        </aside>
+        <div id="sheet-backdrop" class="sheet-backdrop" hidden></div>
+
+        <section id="board-column" class="board-column" aria-label="Board">
+          <div id="canvas-frame" class="canvas-frame">
+            <div id="tool-strip" class="tool-strip">
+              <div id="tool-group" class="segmented" role="radiogroup" aria-label="Tool">
+                <button type="button" role="radio" data-tool="draw" aria-checked="true" title="Draw (1)">
+                  <svg class="icon" aria-hidden="true"><use href="#i-draw" /></svg><span>Draw</span>
+                </button>
+                <button type="button" role="radio" data-tool="select" aria-checked="false" title="Select (2)">
+                  <svg class="icon" aria-hidden="true"><use href="#i-select" /></svg><span>Select</span>
+                </button>
+                <button type="button" role="radio" data-tool="stamp" aria-checked="false" title="Stamp (3)">
+                  <svg class="icon" aria-hidden="true"><use href="#i-stamp" /></svg><span>Stamp</span>
+                </button>
+                <button type="button" role="radio" data-tool="pan" aria-checked="false" title="Pan (4)">
+                  <svg class="icon" aria-hidden="true"><use href="#i-pan" /></svg><span>Pan</span>
+                </button>
+              </div>
+
+              <div id="selection-group" class="context-group" role="group" aria-label="Selection" hidden>
+                <button class="button button-quiet" type="button" data-selection-command="copy" title="Copy (⌘C)">
+                  <svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg><span>Copy</span>
+                </button>
+                <button class="button button-quiet" type="button" data-selection-command="paste" title="Paste (⌘V)">
+                  <svg class="icon" aria-hidden="true"><use href="#i-paste" /></svg><span>Paste</span>
+                </button>
+                <button class="button button-quiet" type="button" data-selection-command="rotate" title="Rotate selection">
+                  <svg class="icon" aria-hidden="true"><use href="#i-rotate-right" /></svg><span>Rotate</span>
+                </button>
+                <button class="button button-quiet" type="button" data-selection-command="flip" title="Flip selection">
+                  <svg class="icon" aria-hidden="true"><use href="#i-flip" /></svg><span>Flip</span>
+                </button>
+                <button class="button button-quiet" type="button" data-selection-command="delete" title="Delete cells (Delete)">
+                  <svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg><span>Delete</span>
+                </button>
+                <button class="button button-quiet" type="button" data-selection-command="deselect" title="Deselect (Esc)">
+                  <svg class="icon" aria-hidden="true"><use href="#i-deselect" /></svg><span>Deselect</span>
+                </button>
+              </div>
+
+              <div id="stamp-group" class="context-group" role="group" aria-label="Stamp" hidden>
+                <span id="stamp-name" class="context-label">Stamping: Glider</span>
+                <button id="stamp-rotate-left" class="icon-button" type="button" aria-label="Rotate stamp left">
+                  <svg class="icon" aria-hidden="true"><use href="#i-rotate-left" /></svg>
+                </button>
+                <button id="stamp-rotate-right" class="icon-button" type="button" aria-label="Rotate stamp right">
+                  <svg class="icon" aria-hidden="true"><use href="#i-rotate-right" /></svg>
+                </button>
+                <button id="stamp-flip" class="icon-button" type="button" aria-label="Flip stamp" aria-pressed="false">
+                  <svg class="icon" aria-hidden="true"><use href="#i-flip" /></svg>
+                </button>
+                <button id="stamp-done" class="button" type="button">Done</button>
+              </div>
+
+              <div class="strip-right">
+                <button id="undo" class="icon-button" type="button" aria-label="Undo (⌘Z)" disabled>
+                  <svg class="icon" aria-hidden="true"><use href="#i-undo" /></svg>
+                </button>
+                <button id="redo" class="icon-button" type="button" aria-label="Redo (⇧⌘Z)" disabled>
+                  <svg class="icon" aria-hidden="true"><use href="#i-redo" /></svg>
+                </button>
+                <div class="menu-anchor">
+                  <button id="more-menu-toggle" class="icon-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" aria-label="More board actions">
+                    <svg class="icon" aria-hidden="true"><use href="#i-more" /></svg>
+                  </button>
+                  <div id="more-menu" class="menu menu-right" role="menu" hidden>
+                    <button id="clear-board" type="button" role="menuitem">
+                      <svg class="icon" aria-hidden="true"><use href="#i-eraser" /></svg><span>Clear board</span>
+                    </button>
+                    <button id="import-rle" type="button" role="menuitem">
+                      <svg class="icon" aria-hidden="true"><use href="#i-import" /></svg><span>Import RLE…</span>
+                    </button>
+                    <button id="export-rle" type="button" role="menuitem">
+                      <svg class="icon" aria-hidden="true"><use href="#i-export" /></svg><span>Export RLE</span>
+                    </button>
+                    <button id="fit-mobile" class="mobile-only" type="button" role="menuitem">
+                      <svg class="icon" aria-hidden="true"><use href="#i-fit" /></svg><span>Fit board</span>
+                    </button>
+                    <button id="how-life-works-mobile" class="mobile-only" type="button" role="menuitem">
+                      <svg class="icon" aria-hidden="true"><use href="#i-info" /></svg><span>How Life works</span>
+                    </button>
+                    <button id="shortcuts" class="desktop-only" type="button" role="menuitem">
+                      <svg class="icon" aria-hidden="true"><use href="#i-keyboard" /></svg><span>Keyboard shortcuts</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div id="canvas-host" class="canvas-host">
+              <canvas id="world" aria-label="Game of Life board"></canvas>
+              <p id="status-mobile" class="status-mobile mobile-only" aria-hidden="true"></p>
+              <div id="rules-popover" class="popover" role="dialog" aria-label="How Life works" hidden>
+                <div class="rules-example" aria-hidden="true">
+                  <span></span><span class="live"></span><span></span>
+                  <span class="live"></span><span class="focus"></span><span class="live"></span>
+                  <span></span><span></span><span></span>
+                </div>
+                <ol class="rules-list">
+                  <li>Every cell looks at its 8 neighbours.</li>
+                  <li>A live cell with 2 or 3 live neighbours stays alive. Fewer, and it dies of loneliness; more, and it dies of crowding.</li>
+                  <li>An empty cell with exactly 3 live neighbours becomes alive.</li>
+                </ol>
+                <p class="rules-foot">All cells update at once, one generation at a time. The example cell has 3 live neighbours, so it will be born next generation.</p>
+              </div>
+            </div>
+
+            <div id="transport" class="transport">
+              <button id="play-toggle" class="button button-primary" type="button" aria-label="Play">
+                <svg class="icon icon-play" aria-hidden="true"><use href="#i-play" /></svg>
+                <svg class="icon icon-pause" aria-hidden="true"><use href="#i-pause" /></svg>
+                <span id="play-label">Play</span>
+              </button>
+              <button id="step" class="button" type="button" aria-label="Step one generation">
+                <svg class="icon" aria-hidden="true"><use href="#i-step" /></svg><span>Step</span>
+              </button>
+              <button id="reset" class="button" type="button" aria-label="Reset to the starting state">
+                <svg class="icon" aria-hidden="true"><use href="#i-reset" /></svg><span>Reset</span>
+              </button>
+              <div class="menu-anchor">
+                <button id="speed-toggle" class="button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="speed-menu" aria-label="Speed">
+                  <span id="speed-label">10 gen/s</span>
+                  <svg class="icon" aria-hidden="true"><use href="#i-chevron" /></svg>
+                </button>
+                <div id="speed-menu" class="menu menu-up" role="menu" hidden>
+                  <button type="button" role="menuitemradio" data-speed="1">1 gen/s</button>
+                  <button type="button" role="menuitemradio" data-speed="2">2 gen/s</button>
+                  <button type="button" role="menuitemradio" data-speed="5">5 gen/s</button>
+                  <button type="button" role="menuitemradio" data-speed="10" aria-checked="true">10 gen/s</button>
+                  <button type="button" role="menuitemradio" data-speed="20">20 gen/s</button>
+                  <button type="button" role="menuitemradio" data-speed="40">40 gen/s</button>
+                </div>
+              </div>
+              <div class="transport-right">
+                <div class="zoom-group desktop-only" role="group" aria-label="Zoom">
+                  <button id="zoom-out" class="icon-button" type="button" aria-label="Zoom out">
+                    <svg class="icon" aria-hidden="true"><use href="#i-minus" /></svg>
+                  </button>
+                  <span id="zoom-label" class="zoom-label">100%</span>
+                  <button id="zoom-in" class="icon-button" type="button" aria-label="Zoom in">
+                    <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg>
+                  </button>
+                </div>
+                <button id="fit" class="button desktop-only" type="button" aria-label="Fit board to view (F)">
+                  <svg class="icon" aria-hidden="true"><use href="#i-fit" /></svg><span>Fit</span>
+                </button>
+                <button id="patterns-open" class="button mobile-only" type="button" aria-controls="rail" aria-expanded="false">
+                  <svg class="icon" aria-hidden="true"><use href="#i-pattern" /></svg><span>Patterns</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id="status-line" class="status-line">
+            <p id="status-text" class="status-text" aria-live="polite">
+              Generation <span id="generation">0</span> · <span id="population">0</span> cells
+            </p>
+            <div class="menu-anchor">
+              <button id="how-life-works" class="button button-quiet" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="rules-popover">
+                <svg class="icon" aria-hidden="true"><use href="#i-info" /></svg><span>How Life works</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- STUDIO: inspector -->
+        <aside id="inspector" class="inspector" aria-label="Inspector" hidden>
+          <div class="rail-handle mobile-only" aria-hidden="true"></div>
+          <div class="inspector-head mobile-only">
+            <h2>Experiment</h2>
+            <button id="inspector-close" class="icon-button" type="button" aria-label="Close inspector">
+              <svg class="icon" aria-hidden="true"><use href="#i-close" /></svg>
+            </button>
+          </div>
+
+          <section class="inspector-section" aria-labelledby="experiment-heading">
+            <h3 id="experiment-heading">Experiment</h3>
+            <label class="field-row">
+              <span>Grid size</span>
+              <select id="grid-size">
+                <option value="small">120 × 80</option>
+                <option value="medium" selected>300 × 200</option>
+                <option value="large">420 × 280</option>
+                <option value="custom" hidden>Custom</option>
+              </select>
+            </label>
+            <label class="field-row">
+              <span>Edges</span>
+              <select id="edges">
+                <option value="wrapped" selected>Wrapped</option>
+                <option value="bounded">Bounded</option>
+              </select>
+            </label>
+          </section>
+
+          <section id="circuit-section" class="inspector-section" aria-labelledby="circuit-heading" hidden>
+            <h3 id="circuit-heading">Logic</h3>
+            <p id="circuit-name" class="inspector-note"></p>
+            <h4>Inputs</h4>
+            <div id="inputs-list" class="switch-list"></div>
+            <h4>Outputs</h4>
+            <div id="outputs-list" class="lamp-list"></div>
+            <button id="run-circuit" class="button button-primary button-wide" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-play" /></svg><span>Run until output</span>
+            </button>
+            <div id="run-progress" class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="600" aria-valuenow="0" hidden>
+              <span id="run-progress-bar" class="progress-bar"></span>
+            </div>
+            <p id="run-progress-text" class="inspector-note mono" hidden></p>
+            <div class="truth-card">
+              <div class="truth-head">
+                <h4>Truth table</h4>
+                <button id="fill-truth-table" class="button button-small" type="button">Run all</button>
+              </div>
+              <table id="truth-table" class="truth-table"></table>
+            </div>
+          </section>
+
+          <section class="inspector-section" aria-labelledby="details-heading">
+            <h3 id="details-heading">Details</h3>
+            <label class="field-stack">
+              <span>Description</span>
+              <textarea id="project-description" rows="3" placeholder="What does this project show?"></textarea>
+            </label>
+            <label class="field-stack">
+              <span>Tags</span>
+              <input id="project-tags" type="text" placeholder="glider, logic" autocomplete="off" />
+            </label>
+            <button id="publish-project-mobile" class="button button-primary button-wide mobile-only" type="button">Publish</button>
+          </section>
+
+          <section class="inspector-section" aria-labelledby="history-heading">
+            <h3 id="history-heading">Version history</h3>
+            <div id="version-history" class="version-list"></div>
+          </section>
+        </aside>
+        <!-- /STUDIO -->
+      </main>
+
+      <!-- STUDIO: projects list page -->
+      <section id="projects-page" class="page projects-page" aria-label="Projects" hidden>
+        <div class="page-head">
+          <h1>Projects</h1>
+          <button id="new-project" class="button button-primary" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg><span>New project</span>
+          </button>
+        </div>
+        <div id="projects-list" class="projects-list" role="list"></div>
+      </section>
+      <!-- /STUDIO -->
+
+      <!-- COMMUNITY -->
+      <section id="community-panel" class="page community-page" aria-label="Community" hidden>
+        <div id="community-gallery" class="community-gallery">
+          <div class="gallery-toolbar">
+            <label class="search-field">
+              <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
+              <input id="community-search" type="search" placeholder="Search patterns, tags, authors" aria-label="Search community" autocomplete="off" />
+            </label>
+            <div id="community-filters" class="chip-row" role="tablist" aria-label="Filter">
+              <button type="button" role="tab" data-community-filter="all" aria-selected="true">All</button>
+              <button type="button" role="tab" data-community-filter="famous" aria-selected="false">Famous</button>
+              <button type="button" role="tab" data-community-filter="trending" aria-selected="false">Trending</button>
+              <button type="button" role="tab" data-community-filter="new" aria-selected="false">New</button>
+            </div>
+          </div>
+          <p id="community-status" class="community-status" role="status" hidden></p>
+          <div id="community-grid" class="community-grid" role="list"></div>
+        </div>
+        <div id="community-detail" class="community-detail" hidden></div>
+      </section>
+      <!-- /COMMUNITY -->
+    </div>
+
+    <dialog id="account-dialog" class="dialog account-dialog" aria-labelledby="account-dialog-title">
+      <form method="dialog" class="dialog-card">
+        <div class="dialog-head">
+          <h2 id="account-dialog-title">Account</h2>
+          <button id="account-close" class="icon-button" value="cancel" type="submit" aria-label="Close">
+            <svg class="icon" aria-hidden="true"><use href="#i-close" /></svg>
+          </button>
+        </div>
+        <p id="account-context" class="dialog-note">Sign in to publish, star, and comment.</p>
+        <div id="account-tabs" class="kind-tabs" role="tablist" aria-label="Account action">
+          <button type="button" data-account-mode="sign-in" role="tab" aria-selected="true">Sign in</button>
+          <button type="button" data-account-mode="sign-up" role="tab" aria-selected="false">Create account</button>
+          <button type="button" data-account-mode="recover" role="tab" aria-selected="false">Recover</button>
+        </div>
+        <div id="account-fields" class="account-fields">
+          <label class="field-stack" data-account-field="name"><span>Display name</span><input id="account-name" type="text" autocomplete="name" /></label>
+          <label class="field-stack"><span>Email</span><input id="account-email" type="email" autocomplete="email" /></label>
+          <label class="field-stack" data-account-field="recovery"><span>Recovery key</span><input id="account-recovery-key" type="text" autocomplete="off" /></label>
+          <label class="field-stack"><span>Password</span><input id="account-password" type="password" minlength="12" maxlength="128" autocomplete="current-password" /></label>
+        </div>
+        <p id="account-output" class="account-output" role="status">Passwords are 12 to 128 characters.</p>
+        <output id="account-recovery-output" class="account-recovery-output" hidden></output>
+        <button id="account-submit" class="button button-primary button-wide" type="button">Sign in</button>
+        <section id="account-security" class="account-security" hidden>
+          <h3>Security</h3>
+          <p class="dialog-note">Recovery keys are shown once. Life Lab cannot email a recovery key.</p>
+          <button id="account-create-recovery" class="button" type="button">Generate recovery key</button>
+          <button id="account-sign-out" class="button" type="button">Sign out</button>
+          <label class="field-stack"><span>Type DELETE to confirm</span><input id="account-delete-confirmation" type="text" autocomplete="off" /></label>
+          <button id="account-delete" class="button button-danger" type="button">Delete account and publications</button>
+        </section>
+      </form>
+    </dialog>
+
+    <dialog id="rle-dialog" class="dialog" aria-labelledby="rle-dialog-title">
+      <form method="dialog" class="dialog-card">
+        <div class="dialog-head">
+          <h2 id="rle-dialog-title">Import RLE</h2>
+          <button id="rle-close" class="icon-button" value="cancel" type="submit" aria-label="Close">
+            <svg class="icon" aria-hidden="true"><use href="#i-close" /></svg>
+          </button>
+        </div>
+        <p id="rle-note" class="dialog-note">Paste RLE text from a Life pattern page. The pattern becomes a stamp.</p>
+        <textarea id="rle-field" rows="8" spellcheck="false" placeholder="x = 3, y = 3, rule = B3/S23&#10;bo$2bo$3o!"></textarea>
+        <p id="rle-error" class="field-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button id="rle-copy" class="button" type="button" hidden>Copy</button>
+          <button id="rle-stamp" class="button button-primary" type="button">Use as stamp</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="shortcuts-dialog" class="dialog" aria-labelledby="shortcuts-title">
+      <form method="dialog" class="dialog-card">
+        <div class="dialog-head">
+          <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+          <button id="shortcuts-close" class="icon-button" value="cancel" type="submit" aria-label="Close">
+            <svg class="icon" aria-hidden="true"><use href="#i-close" /></svg>
+          </button>
+        </div>
+        <dl class="shortcut-list">
+          <div><dt><kbd>Space</kbd></dt><dd>Play / pause</dd></div>
+          <div><dt><kbd>N</kbd></dt><dd>Step one generation</dd></div>
+          <div><dt><kbd>R</kbd></dt><dd>Reset to the starting state</dd></div>
+          <div><dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></dt><dd>Draw, Select, Stamp, Pan</dd></div>
+          <div><dt><kbd>Esc</kbd></dt><dd>Exit stamp or clear selection</dd></div>
+          <div><dt><kbd>⌘Z</kbd> <kbd>⇧⌘Z</kbd></dt><dd>Undo, redo</dd></div>
+          <div><dt><kbd>⌘C</kbd> <kbd>⌘V</kbd></dt><dd>Copy, paste selection</dd></div>
+          <div><dt><kbd>Delete</kbd></dt><dd>Clear cells in the selection</dd></div>
+          <div><dt><kbd>Arrows</kbd></dt><dd>Move the selection</dd></div>
+          <div><dt><kbd>F</kbd></dt><dd>Fit board to view</dd></div>
+          <div><dt><kbd>⌘</kbd> + scroll</dt><dd>Zoom at the pointer</dd></div>
+        </dl>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
     <script id="life-runtime-config" type="application/json">{"backend":"local"}</script>
     <script type="module" src="/src/app.js"></script>

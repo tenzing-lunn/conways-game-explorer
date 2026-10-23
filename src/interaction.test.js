@@ -1,14 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  getContextualGroup,
   getLiveToolAction,
-  getNextTool,
-  getStampCta,
+  getPinchZoom,
   getToolAfterWorkspaceChange,
-  getToolStatusMessage,
+  getToolForKey,
   getWheelAction,
-  shouldHideStampPreview,
-  shouldKeepPointerActiveAfterApply,
   getWheelZoomDelta,
 } from './interaction.js';
 
@@ -23,6 +21,21 @@ test('live tool draws on empty cells when paused or playing', () => {
 
 test('live tool does not erase live cells while the simulation is playing', () => {
   assert.equal(getLiveToolAction({ playing: true, alive: true }), 'draw');
+});
+
+test('number keys map to the four tools', () => {
+  assert.equal(getToolForKey('1'), 'draw');
+  assert.equal(getToolForKey('2'), 'select');
+  assert.equal(getToolForKey('3'), 'stamp');
+  assert.equal(getToolForKey('4'), 'pan');
+  assert.equal(getToolForKey('5'), null);
+});
+
+test('contextual tool group appears only when it can act', () => {
+  assert.equal(getContextualGroup({ tool: 'stamp', hasSelection: false }), 'stamp');
+  assert.equal(getContextualGroup({ tool: 'select', hasSelection: true }), 'selection');
+  assert.equal(getContextualGroup({ tool: 'draw', hasSelection: true }), 'selection');
+  assert.equal(getContextualGroup({ tool: 'draw', hasSelection: false }), null);
 });
 
 test('wheel navigation always returns a zoom delta', () => {
@@ -45,68 +58,14 @@ test('pinch-style wheel movement still zooms around the pointer', () => {
   assert.equal(action.zoomDelta > 1, true);
 });
 
-test('stamp tool toggles back to draw when clicked while already active', () => {
-  assert.equal(getNextTool({ currentTool: 'stamp', requestedTool: 'stamp' }), 'draw');
+test('pinch zoom scales from the starting zoom and clamps', () => {
+  assert.equal(getPinchZoom({ startDistance: 100, distance: 200, startZoom: 1 }), 2);
+  assert.equal(getPinchZoom({ startDistance: 100, distance: 1, startZoom: 1 }), 0.18);
+  assert.equal(getPinchZoom({ startDistance: 0, distance: 50, startZoom: 0.5 }), 0.5);
 });
 
-test('stamp call to action makes the off switch explicit and dangerous', () => {
-  assert.deepEqual(getStampCta({ active: true }), {
-    label: 'Turn Stamp Off',
-    tone: 'danger',
-    ariaLabel: 'Turn Stamp mode off',
-  });
-});
-
-test('inactive stamp call to action asks to turn stamping on', () => {
-  assert.deepEqual(getStampCta({ active: false }), {
-    label: 'Stamp',
-    tone: 'neutral',
-    ariaLabel: 'Turn on Stamp mode',
-  });
-});
-
-test('stamp preview hides after the active stamp tool is clicked again', () => {
-  assert.equal(shouldHideStampPreview({ currentTool: 'stamp', requestedTool: 'stamp' }), true);
-});
-
-test('non-stamp tools still switch directly', () => {
-  assert.equal(getNextTool({ currentTool: 'draw', requestedTool: 'erase' }), 'erase');
-  assert.equal(getNextTool({ currentTool: 'erase', requestedTool: 'stamp' }), 'stamp');
-  assert.equal(getNextTool({ currentTool: 'draw', requestedTool: 'pan' }), 'pan');
-});
-
-test('stamp placement keeps the tool active for repeated placement', () => {
-  assert.equal(shouldKeepPointerActiveAfterApply({ pointerMode: 'stamp' }), true);
-  assert.equal(shouldKeepPointerActiveAfterApply({ pointerMode: 'draw' }), true);
-  assert.equal(shouldKeepPointerActiveAfterApply({ pointerMode: 'pan' }), false);
-});
-
-test('stamp status copy describes persistent stamping without paste-once language', () => {
-  const message = getToolStatusMessage({
-    tool: 'stamp',
-    selectedPresetName: 'Gosper glider gun',
-  });
-
-  assert.match(message, /Stamp on: Gosper glider gun/);
-  assert.doesNotMatch(message, /paste|click the board to paste|Place again/i);
-});
-
-test('draw status copy explains drawing-board erasing without a separate erase tool', () => {
-  const message = getToolStatusMessage({ tool: 'draw' });
-
-  assert.match(message, /drag from empty cells to paint/i);
-  assert.match(message, /drag from live cells while paused to erase/i);
-});
-
-test('pan status copy explains board movement directly', () => {
-  const message = getToolStatusMessage({ tool: 'pan' });
-
-  assert.match(message, /Pan mode/i);
-  assert.match(message, /drag the board/i);
-});
-
-test('switching workspaces clears transient canvas tool state', () => {
+test('switching sections clears transient canvas tool state', () => {
   assert.equal(getToolAfterWorkspaceChange({ currentTool: 'stamp' }), 'draw');
   assert.equal(getToolAfterWorkspaceChange({ currentTool: 'pan' }), 'draw');
-  assert.equal(getToolAfterWorkspaceChange({ currentTool: 'draw' }), 'draw');
+  assert.equal(getToolAfterWorkspaceChange({ currentTool: 'select' }), 'select');
 });
