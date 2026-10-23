@@ -351,6 +351,20 @@
           <section id="circuit-section" class="inspector-section" aria-labelledby="circuit-heading" hidden>
             <h3 id="circuit-heading">Logic</h3>
             <p id="circuit-name" class="inspector-note"></p>
+            <div id="chain-row" class="chain-row" hidden>
+              <div id="chain-list" class="chain-list" aria-label="Gate chain"></div>
+              <div class="menu-anchor">
+                <button id="add-gate" class="button button-small" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="add-gate-menu">
+                  <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg><span>Add gate</span>
+                </button>
+                <div id="add-gate-menu" class="menu" role="menu" hidden>
+                  <button type="button" role="menuitem" data-add-gate="and">AND</button>
+                  <button type="button" role="menuitem" data-add-gate="or">OR</button>
+                  <button type="button" role="menuitem" data-add-gate="not">NOT</button>
+                </div>
+              </div>
+            </div>
+            <p id="chain-note" class="inspector-note" hidden></p>
             <h4>Inputs</h4>
             <div id="inputs-list" class="switch-list"></div>
             <h4>Outputs</h4>

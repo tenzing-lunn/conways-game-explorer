@@ -116,6 +116,73 @@ input.project-title:focus {
   font-family: var(--mono);
 }
 
+.switch-row > span > small {
+  margin-left: 8px;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* Gate chain */
+.chain-row,
+.chain-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.chain-row {
+  gap: 6px 10px;
+}
+
+.chain-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.chain-arrow {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chain-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-right: -5px;
+  border-radius: 50%;
+  color: var(--muted);
+  transition: background var(--motion), color var(--motion);
+}
+
+.chain-remove:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.chain-remove .icon {
+  width: 12px;
+  height: 12px;
+  flex-basis: 12px;
+}
+
+#add-gate-menu {
+  min-width: 120px;
+}
+
 .switch {
   position: relative;
   width: 36px;

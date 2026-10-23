@@ -11,7 +11,7 @@ import {
 } from './life.js';
 import { boardFromRle, boardToRle, createBoardHistory, copySelection, pasteSelection, transformSelection } from './board-tools.js';
 import { createSimulationClient } from './simulation-client.js';
-import { buildCircuitExperiment, circuitExperiments, readCircuitOutputs } from './circuits.js';
+import { buildCircuitChain, buildCircuitExperiment, circuitExperiments, readCircuitOutputs, validateCircuitChain } from './circuits.js';
 import { createCommunityRepository, migrateLocalState } from './community-repository.js';
 import {
   addCreationComment,
@@ -62,7 +62,7 @@ const WORLD_HEIGHT = 200;
 const LOCAL_RECOVERY_KEY = 'life-logic-dev-recovery-v1';
 const THEME_KEY = 'life-theme';
 const BASE_CELL_SIZE = 10;
-const MIN_ZOOM = 0.18;
+const MIN_ZOOM = 0.12;
 const MAX_ZOOM = 3.6;
 const MAX_MAIN_THREAD_CATCH_UP_STEPS = 4;
 const SPEED_STEPS = [1, 2, 5, 10, 20, 40];
@@ -193,6 +193,11 @@ const elements = {
   edges: $('#edges'),
   circuitSection: $('#circuit-section'),
   circuitName: $('#circuit-name'),
+  chainRow: $('#chain-row'),
+  chainList: $('#chain-list'),
+  chainNote: $('#chain-note'),
+  addGate: $('#add-gate'),
+  addGateMenu: $('#add-gate-menu'),
   inputsList: $('#inputs-list'),
   outputsList: $('#outputs-list'),
   runCircuit: $('#run-circuit'),
@@ -1073,6 +1078,7 @@ function scheduleLocalRecovery() {
         generation: 0,
         population: authored.population,
         settings: getCurrentDesignSettings(),
+        circuit: getCircuitSpec(),
         savedAt: new Date().toISOString(),
       };
       await writeRecovery(LOCAL_RECOVERY_KEY, recovery);
@@ -1121,6 +1127,7 @@ async function restoreLocalRecovery() {
       sourceOwnerName: '',
     };
     setProjectFields({ title: recovery.title, description: recovery.description, tags: recovery.tags });
+    restoreCircuit(recovery.circuit);
     syncDesignControls();
     markDesignDirty(true);
     showToast('Recovered unsaved work', { kind: 'info' });
@@ -1330,6 +1337,7 @@ function openProject(creationId) {
     boardLoaded: true,
   });
   setProjectFields(creation);
+  restoreCircuit(creation.previewConfig?.circuit);
   setPublishStatus(creation.visibility === 'public' ? 'published' : 'draft');
   markDesignDirty(false);
   return true;
@@ -1406,6 +1414,10 @@ async function saveCurrentCreation({ publish = false, resumed = false } = {}) {
       if (publish) creation = await community.publishCreation(activeCreationId);
     } else {
       creation = await community.createCreation(input, { publish });
+    }
+    // Publishing rebuilds the preview config, so put the circuit spec back.
+    if (publish && creation && input.previewConfig.circuit) {
+      creation = await community.updateCreationMetadata(creation.id, { previewConfig: { ...creation.previewConfig, circuit: input.previewConfig.circuit } });
     }
   } catch (error) {
     if (publish) setPublishStatus('failed');
@@ -1613,8 +1625,29 @@ function renderVersionHistory(creation) {
  * Circuits (Studio → Logic)
  * ------------------------------------------------------------------------- */
 
-function circuitInput(id) {
-  return state.circuitInputs[id] || {};
+// A circuit is a list of gate ids: AND/OR/NOT chain left to right (one gate is
+// cell-for-cell the single-gate experiment); the half-adder stays standalone.
+function circuitGates(experiment = state.circuit) {
+  return experiment ? experiment.gates || [experiment.id] : [];
+}
+
+function buildCircuit(gates, inputs) {
+  return gates[0] === 'half-adder' ? buildCircuitExperiment('half-adder', inputs) : buildCircuitChain({ gates, inputs });
+}
+
+function getCircuitSpec() {
+  return state.circuit ? { gates: circuitGates(), inputs: { ...state.circuit.inputs } } : null;
+}
+
+// Tiles and input ports to draw and label. Only the half-adder lacks them;
+// both of its inputs enter from the west.
+function getCircuitGeometry(experiment) {
+  if (experiment.tiles) return { tiles: experiment.tiles, ports: experiment.ports.filter((port) => port.type === 'input') };
+  const { origin, tile, lanes } = getCircuitMarkers(experiment.id);
+  return {
+    tiles: [{ gateId: experiment.id, x: origin.x, y: origin.y, width: tile, height: tile }],
+    ports: lanes.map((lane) => ({ tileIndex: 0, name: lane.id, side: 'west', x: origin.x, y: lane.y })),
+  };
 }
 
 function exitCircuit() {
@@ -1625,11 +1658,13 @@ function exitCircuit() {
   updatePresetSelection();
 }
 
-function openCircuitExperiment(id, { fit = true } = {}) {
-  const experiment = buildCircuitExperiment(id, circuitInput(id));
+function openCircuit(gates, { fit = true, inputs = null } = {}) {
+  const key = gates.join('>');
+  state.circuitInputs[key] = inputs || state.circuitInputs[key] || {};
+  const experiment = buildCircuit(gates, state.circuitInputs[key]);
   state.circuit = experiment;
   state.circuitOutputs = null;
-  if (state.truthRows?.id !== id) state.truthRows = null;
+  if (state.truthRows?.id !== experiment.id) state.truthRows = null;
   state.designSettings = mergeDesignSettings(state.designSettings, {
     gridPreset: 'custom',
     width: experiment.board.width,
@@ -1648,16 +1683,43 @@ function openCircuitExperiment(id, { fit = true } = {}) {
   renderInspector();
 }
 
-function fitCircuit() {
+function fitCircuit({ deferred = false } = {}) {
   if (!state.circuit) return;
-  fitRegion(getCircuitMarkers(state.circuit.id).fitRegion, { padding: 16, maxZoom: 1 });
+  const { tiles } = getCircuitGeometry(state.circuit);
+  const first = tiles[0];
+  const last = tiles[tiles.length - 1];
+  // Room for the "A →" lane on the west, the probe label on the east and the
+  // south lanes below (the half-adder has none).
+  const region = {
+    x: first.x - 44,
+    y: first.y - 16,
+    width: last.x + last.width - first.x + 44 + 56,
+    height: first.height + 16 + (state.circuit.tiles ? 56 : 16),
+  };
+  const options = { padding: 16, maxZoom: 1 };
+  // A restored project is still mid-layout; the next canvas resize applies the fit.
+  if (deferred) state.pendingFit = { region, options };
+  else fitRegion(region, options);
 }
 
 function setCircuitInput(name, value) {
   if (!state.circuit) return;
-  state.circuitInputs[state.circuit.id] ||= {};
-  state.circuitInputs[state.circuit.id][name] = Boolean(value);
-  openCircuitExperiment(state.circuit.id, { fit: false });
+  const gates = circuitGates();
+  state.circuitInputs[gates.join('>')][name] = Boolean(value);
+  openCircuit(gates, { fit: false });
+}
+
+function changeChain(gates) {
+  if (!state.circuit || state.circuitRunning || !validateCircuitChain(gates).ok) return;
+  openCircuit(gates, { inputs: { ...state.circuit.inputs } });
+}
+
+// Rebuild a saved or recovered circuit from its { gates, inputs } spec.
+function restoreCircuit(spec) {
+  if (!Array.isArray(spec?.gates) || !spec.gates.length) return;
+  if (spec.gates[0] !== 'half-adder' && !validateCircuitChain(spec.gates).ok) return;
+  openCircuit(spec.gates, { fit: false, inputs: { ...(spec.inputs || {}) } });
+  fitCircuit({ deferred: true });
 }
 
 async function runCircuitExperiment() {
@@ -1698,17 +1760,26 @@ async function runCircuitExperiment() {
 async function fillTruthTable() {
   if (!state.circuit || state.circuitRunning) return;
   const experiment = state.circuit;
+  const gates = circuitGates(experiment);
   const rows = getInputCombinations(experiment.inputs ? Object.keys(experiment.inputs) : []);
   state.circuitRunning = true;
-  state.truthRows = { id: experiment.id, rows: rows.map((inputs) => ({ inputs, outputs: null })) };
+  state.truthRows = { id: experiment.id, rows: rows.map((inputs) => ({ inputs, outputs: null })), current: 0, generation: 0 };
   state.playing = false;
   updatePlayButton();
   renderInspector();
   try {
     for (const row of state.truthRows.rows) {
-      const built = buildCircuitExperiment(experiment.id, row.inputs);
+      state.truthRows.current += 1;
+      state.truthRows.generation = 0;
+      renderRunProgress();
+      const built = buildCircuit(gates, row.inputs);
       await state.simulation.load(ownedSnapshot(built.board), { wrapping: false });
-      const board = await state.simulation.advance(built.observeGeneration);
+      const board = await state.simulation.advance(built.observeGeneration, {
+        onSnapshot: (snapshot) => {
+          state.truthRows.generation = snapshot.generation;
+          renderRunProgress();
+        },
+      });
       row.outputs = readCircuitOutputs(built, board);
       renderTruthTable();
     }
@@ -1718,7 +1789,7 @@ async function fillTruthTable() {
   } finally {
     state.circuitRunning = false;
     // Put the authored experiment back on the board and in the worker.
-    openCircuitExperiment(experiment.id, { fit: false });
+    openCircuit(gates, { fit: false });
   }
 }
 
@@ -1728,14 +1799,19 @@ function renderInspector() {
   renderVersionHistory(getActiveCreation());
   if (!experiment) return;
 
-  const card = GATE_CARDS[experiment.id] || { name: experiment.title };
-  elements.circuitName.textContent = `${card.name}: ${card.note || experiment.description}`;
+  const gates = circuitGates(experiment);
+  const card = GATE_CARDS[gates[0]] || { name: experiment.title };
+  elements.circuitName.textContent = gates.length > 1 ? 'Each gate feeds the next.' : `${card.name}: ${card.note || experiment.description}`;
+  renderChainRow(experiment);
 
+  const { tiles, ports } = getCircuitGeometry(experiment);
   elements.inputsList.innerHTML = '';
   for (const [name, value] of Object.entries(experiment.inputs || {})) {
+    const port = ports.find((candidate) => candidate.name === name);
+    const entry = port ? `${port.side === 'west' ? '→' : '↑'} ${GATE_CARDS[tiles[port.tileIndex].gateId]?.name || ''}` : '';
     const row = document.createElement('label');
     row.className = 'switch-row';
-    row.innerHTML = `<span>${name.toUpperCase()}</span><input class="switch" type="checkbox" role="switch" data-input="${name}" aria-label="Input ${name.toUpperCase()}" ${value ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
+    row.innerHTML = `<span>${name.toUpperCase()}<small>${entry}</small></span><input class="switch" type="checkbox" role="switch" data-input="${name}" aria-label="Input ${name.toUpperCase()}" ${value ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
     elements.inputsList.append(row);
   }
 
@@ -1756,17 +1832,38 @@ function renderInspector() {
   renderTruthTable();
 }
 
+function renderChainRow(experiment) {
+  const gates = circuitGates(experiment);
+  elements.chainRow.hidden = !experiment.tiles;
+  if (!experiment.tiles) {
+    elements.chainNote.hidden = false;
+    elements.chainNote.textContent = 'Standalone component.';
+    return;
+  }
+  elements.chainList.innerHTML = gates.map((id, index) => `${index ? '<span class="chain-arrow" aria-hidden="true">→</span>' : ''}<span class="chain-chip" data-chain-gate="${id}">${GATE_CARDS[id].name}${gates.length > 1
+    ? `<button class="chain-remove" type="button" data-remove-gate="${index}" aria-label="Remove ${GATE_CARDS[id].name}" ${state.circuitRunning ? 'disabled' : ''}><svg class="icon" aria-hidden="true"><use href="#i-close" /></svg></button>`
+    : ''}</span>`).join('');
+  const canAdd = validateCircuitChain([...gates, 'and']).ok;
+  elements.addGate.disabled = !canAdd || state.circuitRunning;
+  elements.chainNote.hidden = canAdd;
+  elements.chainNote.textContent = canAdd ? '' : 'Up to 3 gates.';
+}
+
 function renderRunProgress() {
   const experiment = state.circuit;
   if (!experiment) return;
+  const filling = state.circuitRunning && state.truthRows?.current > 0;
   const running = state.circuitRunning && state.circuitOutputs?.some((output) => output.settled === false);
   const settled = Boolean(state.circuitOutputs?.length) && !running;
-  const generation = Math.min(state.board.generation, experiment.observeGeneration);
-  elements.runProgress.hidden = !running && !settled;
-  elements.runProgressText.hidden = !running && !settled;
+  const generation = Math.min(filling ? state.truthRows.generation : state.board.generation, experiment.observeGeneration);
+  const visible = filling || running || settled;
+  elements.runProgress.hidden = !visible;
+  elements.runProgressText.hidden = !visible;
   elements.runProgress.setAttribute('aria-valuenow', String(generation));
   elements.runProgressBar.style.width = `${(generation / experiment.observeGeneration) * 100}%`;
-  elements.runProgressText.textContent = `generation ${generation.toLocaleString()} / ${experiment.observeGeneration.toLocaleString()}`;
+  elements.runProgressText.textContent = filling
+    ? `Row ${state.truthRows.current} of ${state.truthRows.rows.length}`
+    : `generation ${generation.toLocaleString()} / ${experiment.observeGeneration.toLocaleString()}`;
 }
 
 function renderTruthTable() {
@@ -2253,8 +2350,7 @@ function drawStampPreview(cellSize) {
 function drawCircuitMarkers(cellSize) {
   const experiment = state.circuit;
   if (!experiment || experiment.board.width !== state.board.width || experiment.board.height !== state.board.height) return;
-  const markers = getCircuitMarkers(experiment.id);
-  const { origin, tile } = markers;
+  const { tiles, ports } = getCircuitGeometry(experiment);
   const labelSize = 12;
   ctx.save();
   ctx.strokeStyle = palette.accent;
@@ -2263,38 +2359,43 @@ function drawCircuitMarkers(cellSize) {
   ctx.font = `500 ${labelSize}px ${getComputedStyle(document.documentElement).getPropertyValue('--mono')}`;
   ctx.textBaseline = 'middle';
 
-  // Gate tile outline.
+  // Gate tile outlines.
   ctx.setLineDash([6, 4]);
-  ctx.strokeRect(Math.round(origin.x * cellSize) + 0.5, Math.round(origin.y * cellSize) + 0.5, Math.round(tile * cellSize), Math.round(tile * cellSize));
+  for (const tile of tiles) {
+    ctx.strokeRect(Math.round(tile.x * cellSize) + 0.5, Math.round(tile.y * cellSize) + 0.5, Math.round(tile.width * cellSize), Math.round(tile.height * cellSize));
+  }
   ctx.setLineDash([]);
   ctx.textAlign = 'left';
-  ctx.fillText(GATE_CARDS[experiment.id]?.name || experiment.title, origin.x * cellSize + 6, origin.y * cellSize - 10);
+  for (const tile of tiles) {
+    ctx.fillText(GATE_CARDS[tile.gateId]?.name || tile.gateId, tile.x * cellSize + 6, tile.y * cellSize - 10);
+  }
 
   // Input lanes with direction arrows.
-  for (const lane of markers.lanes) {
-    const active = experiment.inputs?.[lane.id];
+  for (const port of ports) {
+    const active = experiment.inputs?.[port.name];
+    const label = port.name.toUpperCase();
     ctx.globalAlpha = active ? 1 : 0.45;
-    if (lane.direction === 'east') {
-      const py = Math.round(lane.y * cellSize) + 0.5;
-      const endX = origin.x * cellSize;
+    if (port.side === 'west') {
+      const py = Math.round(port.y * cellSize) + 0.5;
+      const endX = port.x * cellSize;
       ctx.beginPath();
       ctx.moveTo(0, py);
       ctx.lineTo(endX - 4, py);
       ctx.stroke();
       drawArrowHead(endX, py, 0);
       ctx.textAlign = 'right';
-      ctx.fillText(`${lane.label} →`, endX - 10, py - 10);
+      ctx.fillText(`${label} →`, endX - 10, py - 10);
     } else {
-      const px = Math.round(lane.x * cellSize) + 0.5;
+      const px = Math.round(port.x * cellSize) + 0.5;
       const startY = state.board.height * cellSize;
-      const endY = (origin.y + tile) * cellSize;
+      const endY = port.y * cellSize;
       ctx.beginPath();
       ctx.moveTo(px, startY);
       ctx.lineTo(px, endY + 4);
       ctx.stroke();
       drawArrowHead(px, endY, -Math.PI / 2);
       ctx.textAlign = 'left';
-      ctx.fillText(`${lane.label} ↑`, px + 8, endY + 14);
+      ctx.fillText(`${label} ↑`, px + 8, endY + 14);
     }
   }
   ctx.globalAlpha = 1;
@@ -3031,7 +3132,7 @@ function syncCommunity() {
 function getCurrentCreationPreviewConfig() {
   const coordinates = getLiveCoordinates();
   if (!coordinates.length) return {};
-  return createCreationPreviewConfig({
+  const config = createCreationPreviewConfig({
     title: elements.projectTitle.value || 'Untitled project',
     previewConfig: state.previewConfig,
     currentVersion: {
@@ -3039,6 +3140,8 @@ function getCurrentCreationPreviewConfig() {
       settings: getCurrentDesignSettings(),
     },
   });
+  // The circuit spec travels with the project; every repository keeps previewConfig as-is.
+  return state.circuit ? { ...config, circuit: getCircuitSpec() } : config;
 }
 
 function importSharedBuildFromHash() {
@@ -3230,7 +3333,7 @@ function renderLogicList() {
     button.className = 'card';
     button.dataset.gateId = experiment.id;
     button.setAttribute('role', 'listitem');
-    button.setAttribute('aria-pressed', String(state.circuit?.id === experiment.id));
+    button.setAttribute('aria-pressed', String(circuitGates().join('>') === experiment.id));
     const thumb = document.createElement('span');
     thumb.className = 'card-thumb';
     const thumbCanvas = document.createElement('canvas');
@@ -3249,7 +3352,7 @@ function updatePresetSelection() {
     button.setAttribute('aria-pressed', String(state.tool === 'stamp' && button.dataset.patternId === state.selectedPreset?.id));
   }
   for (const button of elements.logicList.querySelectorAll('[data-gate-id]')) {
-    button.setAttribute('aria-pressed', String(button.dataset.gateId === state.circuit?.id));
+    button.setAttribute('aria-pressed', String(button.dataset.gateId === circuitGates().join('>')));
   }
 }
 
@@ -3285,6 +3388,7 @@ const menus = [
   ['#more-menu-toggle', '#more-menu'],
   ['#speed-toggle', '#speed-menu'],
   ['#how-life-works', '#rules-popover'],
+  ['#add-gate', '#add-gate-menu'],
 ].map(([toggle, menu]) => ({ toggle: $(toggle), menu: $(menu) }));
 
 function isMenuOpen(menu) {
@@ -3638,7 +3742,7 @@ function bindEvents() {
   elements.logicList.addEventListener('click', (event) => {
     const card = event.target.closest('[data-gate-id]');
     if (!card) return;
-    openCircuitExperiment(card.dataset.gateId);
+    openCircuit([card.dataset.gateId]);
     closeSheets();
     showToast(`${GATE_CARDS[card.dataset.gateId]?.name || 'Gate'} loaded. Flip the inputs, then run.`, { kind: 'success' });
   });
@@ -3671,6 +3775,14 @@ function bindEvents() {
   elements.inputsList.addEventListener('change', (event) => {
     const input = event.target.closest('[data-input]');
     if (input) setCircuitInput(input.dataset.input, input.checked);
+  });
+  elements.addGateMenu.addEventListener('click', (event) => {
+    const item = event.target.closest('[data-add-gate]');
+    if (item) changeChain([...circuitGates(), item.dataset.addGate]);
+  });
+  elements.chainList.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-remove-gate]');
+    if (button) changeChain(circuitGates().filter((_, index) => index !== Number(button.dataset.removeGate)));
   });
   elements.runCircuit.addEventListener('click', runCircuitExperiment);
   elements.fillTruthTable.addEventListener('click', fillTruthTable);
@@ -3815,6 +3927,7 @@ window.__lifeLab = {
     zoom: state.zoom,
     playing: state.playing,
     circuit: state.circuit?.id || null,
+    gates: circuitGates(),
     selection: state.selection,
   }),
 };
