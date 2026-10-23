@@ -1,8 +1,9 @@
 import { expect, test } from '@playwright/test';
+import { boardPoint, tap, watchErrors } from './helpers.js';
 
-test('selection controls preserve edits through touch, transforms, history and Step', async ({ page, context, isMobile }, testInfo) => {
-  const errors = [];
-  page.on('pageerror', (error) => errors.push(error.message));
+test('selection commands move, copy, paste and transform cells, survive undo/redo, and feed Step', async ({ page, context, isMobile }) => {
+  watchErrors(page);
+  // Mirror what the simulation worker is told so the test can read the authored cells.
   await page.addInitScript(() => {
     const WorkerClass = window.Worker;
     window.Worker = class extends WorkerClass {
@@ -11,39 +12,20 @@ test('selection controls preserve edits through touch, transforms, history and S
         return super.postMessage(data, ...args);
       }
     };
-    const stroke = CanvasRenderingContext2D.prototype.strokeRect;
-    CanvasRenderingContext2D.prototype.strokeRect = function (...args) {
-      if (this.canvas.id === 'world' && this.getLineDash().length) window.selectionOutline = args;
-      return stroke.apply(this, args);
-    };
   });
   await page.goto('/studio');
-  await page.locator('#dev-create-design').click();
-  await page.locator('#clear').click();
-  const tap = async (point) => isMobile ? page.touchscreen.tap(point.x, point.y) : page.mouse.click(point.x, point.y);
-  const openTools = async () => {
-    if (await page.locator('#tool-drawer-toggle').getAttribute('aria-expanded') !== 'true') await page.locator('#tool-drawer-toggle').click();
-  };
-  const closeTools = async () => {
-    if (await page.locator('#tool-drawer-close').isVisible()) await page.locator('#tool-drawer-close').click();
-  };
-  await openTools();
-  await closeTools();
-  const point = await page.evaluate(() => {
-    for (let y = innerHeight * 0.45; y < innerHeight - 100; y += 10) {
-      for (let x = innerWidth * 0.5; x < innerWidth - 60; x += 10) {
-        if ([[-25,-25],[25,25],[0,0]].every(([dx,dy]) => document.elementFromPoint(x+dx,y+dy)?.id === 'world')) return { x, y };
-      }
-    }
-  });
-  expect(point).toBeTruthy();
-  await tap(point);
-  await tap({ x: point.x + 10, y: point.y - 10 });
+  await expect(page.locator('#project-header')).toBeVisible();
+  await expect(page.locator('#population')).toHaveText('0');
+
+  const point = await boardPoint(page, 0.55, 0.5);
+  await tap(page, point, isMobile);
+  await tap(page, { x: point.x + 10, y: point.y - 10 }, isMobile);
   await expect(page.locator('#population')).toHaveText('2');
   const initial = await page.evaluate(() => window.editedCells);
-  await openTools();
-  await page.locator('[data-tool="select"]').click();
-  await closeTools();
+  expect(initial).toHaveLength(2);
+
+  await page.locator('#tool-group [data-tool="select"]').click();
+  await expect(page.locator('#tool-group [data-tool="select"]')).toHaveAttribute('aria-checked', 'true');
   const start = { x: point.x - 20, y: point.y - 20 };
   const end = { x: point.x + 20, y: point.y + 20 };
   if (isMobile) {
@@ -53,35 +35,43 @@ test('selection controls preserve edits through touch, transforms, history and S
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await cdp.detach();
   } else {
-    await page.mouse.move(start.x, start.y); await page.mouse.down();
-    await page.mouse.move(end.x, end.y); await page.mouse.up();
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y);
+    await page.mouse.up();
   }
-  await expect.poll(() => page.evaluate(() => window.selectionOutline)).toBeTruthy();
-  await page.screenshot({ path: `/private/tmp/life-selection-${testInfo.project.name}.png` });
-  await openTools();
-  const command = (name) => page.locator(`[data-selection-command="${name}"]`).click();
-  await command('right');
-  await expect.poll(() => page.evaluate(() => window.editedCells)).toEqual(initial.map(([x,y]) => [x+1,y]));
+  // Selection commands only appear once there is a selection.
+  await expect(page.locator('#selection-group')).toBeVisible();
+  const command = (name) => page.locator(`#selection-group [data-selection-command="${name}"]`).click();
+
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => page.evaluate(() => window.editedCells)).toEqual(initial.map(([x, y]) => [x + 1, y]));
   await command('copy');
-  await command('right'); await command('right');
-  await closeTools();
-  await tap({ x: point.x + 60, y: point.y + 40 });
-  await openTools();
+  await expect(page.locator('#toast')).toHaveText('Selection copied');
+  await command('delete');
+  await expect(page.locator('#population')).toHaveText('0');
+  for (let index = 0; index < 6; index += 1) await page.keyboard.press('ArrowRight');
   await command('paste');
-  await expect(page.locator('#population')).toHaveText('4');
+  await expect(page.locator('#population')).toHaveText('2');
+  await expect.poll(() => page.evaluate(() => window.editedCells)).toEqual(initial.map(([x, y]) => [x + 7, y]));
+
   const beforeRotation = await page.evaluate(() => window.editedCells);
   await command('rotate');
   await expect.poll(() => page.evaluate(() => window.editedCells)).not.toEqual(beforeRotation);
-  const beforeReflection = await page.evaluate(() => window.editedCells);
-  await command('reflect');
-  await expect.poll(() => page.evaluate(() => window.editedCells)).not.toEqual(beforeReflection);
-  await expect(page.locator('#population')).toHaveText('4');
+  const beforeFlip = await page.evaluate(() => window.editedCells);
+  await command('flip');
+  await expect.poll(() => page.evaluate(() => window.editedCells)).not.toEqual(beforeFlip);
+  await expect(page.locator('#population')).toHaveText('2');
   const transformed = await page.evaluate(() => window.editedCells);
+
   await page.locator('#undo').click();
+  await expect.poll(() => page.evaluate(() => window.editedCells)).toEqual(beforeFlip);
   await page.locator('#redo').click();
   await expect.poll(() => page.evaluate(() => window.editedCells)).toEqual(transformed);
+  await expect(page.locator('#selection-group')).toBeHidden();
+
   await page.locator('#step').click();
   await expect(page.locator('#generation')).toHaveText('1');
   await expect(page.locator('#population')).toHaveText('0');
-  expect(errors).toEqual([]);
+  expect(page.errors).toEqual([]);
 });

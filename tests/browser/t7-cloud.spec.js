@@ -132,8 +132,8 @@ test('guest, two users, public snapshots, lineage, privacy, recovery and deletio
 
     await publicPage.goto(`/u/${userA.username}`);
     await expect(publicPage).toHaveTitle(/T7 Ada/);
-    await expect(publicPage.locator('#community-detail')).toContainText('T7 Ada');
-    await expect(publicPage.locator('#community-list')).toContainText('T7 Signal Garden');
+    await expect(publicPage.locator('#community-grid')).toContainText('T7 Ada');
+    await expect(publicPage.locator('#community-grid')).toContainText('T7 Signal Garden');
     await publicPage.screenshot({ path: `/private/tmp/life-${process.env.T8_LIVE_TEST === '1' ? 't8-live' : 't7'}-${testInfo.project.name}.png`, fullPage: true });
     expect(errors).toEqual([]);
     if (process.env.T8_LIVE_TEST === '1') {

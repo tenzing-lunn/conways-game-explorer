@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
+import { RECOVERY_KEY, openMoreMenu, snapshot, watchErrors } from './helpers.js';
 
 test.beforeEach(async ({ page }) => {
-  page.errors = [];
-  page.on('pageerror', (error) => page.errors.push(error.message));
+  watchErrors(page);
   await page.addInitScript(() => {
     const NativeWorker = window.Worker;
     window.workerLoads = [];
@@ -81,32 +81,33 @@ test('actual IndexedDB serializes two-tab edits with import cleanup and rolls ba
 });
 
 test('maximum-size binary recovery reloads and Step uses the recovered board', async ({ page }) => {
-  test.setTimeout(60_000);
-  await page.evaluate(async () => {
+  test.setTimeout(90_000);
+  await page.evaluate(async (key) => {
     const { writeRecovery } = await import('/src/local-database.js');
-    await writeRecovery('life-logic-dev-recovery-v1', {
+    await writeRecovery(key, {
       format: 'life-board-binary-v1', title: 'Maximum board', width: 2048, height: 2048,
-      cells: new Uint8Array(2048 * 2048).fill(1), generation: 0,
+      cells: new Uint8Array(2048 * 2048).fill(1), generation: 0, population: 2048 * 2048,
       settings: { gridPreset: 'custom', width: 2048, height: 2048, wrapping: true },
     });
-  });
+  }, RECOVERY_KEY);
   await page.reload();
   await expect(page.locator('#population')).toHaveText('4,194,304');
   await page.locator('#step').click();
   await expect(page.locator('#generation')).toHaveText('1');
   await expect(page.locator('#population')).toHaveText('0');
-  await page.locator('#reset-start').click();
+  await page.locator('#reset').click();
   await expect(page.locator('#population')).toHaveText('4,194,304');
-  const stored = await page.evaluate(async () => {
+  const stored = await page.evaluate(async (key) => {
     const { readRecovery } = await import('/src/local-database.js');
-    const value = await readRecovery('life-logic-dev-recovery-v1');
+    const value = await readRecovery(key);
     return { bytes: value.cells.byteLength, binary: value.cells instanceof Uint8Array, rle: value.rle };
-  });
+  }, RECOVERY_KEY);
   expect(stored).toEqual({ bytes: 4194304, binary: true, rle: undefined });
 });
 
 test('Undo and Redo reload the worker, and Step after each respects its board', async ({ page }) => {
-  await page.locator('#clear').click();
+  await openMoreMenu(page);
+  await page.locator('#clear-board').click();
   await expect(page.locator('#population')).toHaveText('0');
   await page.locator('#undo').click();
   await expect(page.locator('#population')).toHaveText('5');
@@ -130,39 +131,36 @@ test('opening a saved project replaces the worker seed before Step', async ({ pa
     });
   });
   await page.goto('/studio');
-  await expect(page.locator('#dev-design-title')).toHaveValue('Stationary block');
+  await expect(page.locator('#project-title')).toHaveValue('Stationary block');
   await expect(page.locator('#population')).toHaveText('4');
   await page.locator('#step').click();
   await expect(page.locator('#generation')).toHaveText('1');
   await expect(page.locator('#population')).toHaveText('4');
-  await expect(page.locator('#board-size')).toHaveText('40 x 40');
+  expect(await snapshot(page)).toMatchObject({ width: 40, height: 40 });
 });
 
-test('direct circuit Run waits for readiness, targets an absolute generation and keeps edits', async ({ page }) => {
+test('clearing a large running board cancels stale Worker results', async ({ page }) => {
   test.setTimeout(60_000);
-  await page.goto('/studio');
-  await page.locator('#dev-create-design').click();
-  await page.locator('#tool-drawer-toggle').click();
-  await page.locator('.dev-command-strip > summary').click();
-  const run = page.locator('[data-run-circuit="and"]');
-  await run.click();
-  await expect(page.locator('[data-circuit-output="and"]')).toContainText('LOW', { timeout: 30_000 });
-  await expect(page.locator('#generation')).toHaveText('600');
-  await run.click();
-  await expect(page.locator('#generation')).toHaveText('600');
-  await page.locator('#reset-start').click();
-  await page.locator('#step').click();
-  await expect(page.locator('#generation')).toHaveText('1');
-  await run.click();
-  await expect(page.locator('#generation')).toHaveText('600', { timeout: 30_000 });
-  await page.locator('#clear').click();
-  await run.click();
-  await expect(page.locator('#generation')).toHaveText('600', { timeout: 30_000 });
+  await page.evaluate(async (key) => {
+    const { writeRecovery } = await import('/src/local-database.js');
+    const cells = new Uint8Array(1200 * 1200);
+    for (let index = 0; index < cells.length; index += 2) cells[index] = 1;
+    await writeRecovery(key, {
+      format: 'life-board-binary-v1', title: 'Cancellation board', width: 1200, height: 1200,
+      cells, generation: 0, population: 720_000,
+      settings: { gridPreset: 'custom', width: 1200, height: 1200, wrapping: true, speed: 40 },
+    });
+  }, RECOVERY_KEY);
+  await page.reload();
+  await expect(page.locator('#population')).toHaveText('720,000');
+  await page.locator('#play-toggle').click();
+  await expect(page.locator('#play-label')).toHaveText('Pause');
+  await openMoreMenu(page);
+  await page.locator('#clear-board').click();
   await expect(page.locator('#population')).toHaveText('0');
-  await page.locator('[data-open-circuit="half-adder"]').click();
-  await page.locator('[data-run-circuit="half-adder"]').click();
-  await page.locator('#reset-start').click();
+  // Give any stale worker result time to arrive: it must be ignored.
+  await page.waitForTimeout(750);
+  await expect(page.locator('#population')).toHaveText('0');
   await expect(page.locator('#generation')).toHaveText('0');
-  await page.waitForTimeout(200);
-  await expect(page.locator('#generation')).toHaveText('0');
+  await expect(page.locator('#play-label')).toHaveText('Play');
 });

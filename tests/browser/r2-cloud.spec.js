@@ -17,10 +17,11 @@ test('failed activation retains the guest ID and edits; retry publishes once wit
     return project.id;
   });
   await page.goto('/studio');
-  await expect(page.locator('#dev-design-title')).toHaveValue('Guest refresh regression');
-  if (await page.locator('#tool-drawer-toggle').isVisible()) await page.locator('#tool-drawer-toggle').click();
-  await page.locator('#dev-design-description').fill('Unsaved authored description must survive the whole account transition.');
-  await page.locator('#publish-design').click();
+  await expect(page.locator('#project-title')).toHaveValue('Guest refresh regression');
+  if (await page.locator('#inspector-toggle').isVisible()) await page.locator('#inspector-toggle').click();
+  const publish = page.locator('#publish-project:visible, #publish-project-mobile:visible');
+  await page.locator('#project-description').fill('Unsaved authored description must survive the whole account transition.');
+  await publish.click();
   await expect(page.locator('#account-dialog')).toBeVisible();
   let afterComplete = false;
   let refreshes = 0;
@@ -36,10 +37,10 @@ test('failed activation retains the guest ID and edits; retry publishes once wit
   await page.locator('#account-email').fill(email);
   await page.locator('#account-password').fill('a-long-browser-test-password');
   await page.locator('#account-submit').click();
-  await expect(page.locator('#community-auth-output')).toContainText('Migration paused', { timeout: 30_000 });
+  await expect(page.locator('#account-output')).toContainText('Migration paused', { timeout: 30_000 });
   await page.locator('#account-close').click();
-  await page.locator('#save-design').click();
-  await expect(page.locator('#dev-dirty-state')).toHaveText('Saved');
+  await page.locator('#save-project').click();
+  await expect(page.locator('#save-state')).toHaveAttribute('data-status', 'saved');
   const retained = await page.evaluate(async (localId) => {
     const { createLocalCommunityRepository } = await import('/src/community-repository.js');
     const state = await createLocalCommunityRepository().loadCommunityState();
@@ -52,7 +53,7 @@ test('failed activation retains the guest ID and edits; retry publishes once wit
   await page.unroute('**/api/community/state');
   await page.reload();
   // The queued Publish resumes after successful activation, including reload.
-  await expect(page.locator('#publish-design')).toHaveText('Published', { timeout: 30_000 });
+  await expect(publish).toHaveText('Published', { timeout: 30_000 });
   const response = await page.request.get('/api/community/state');
   expect(response.ok()).toBeTruthy();
   const cloud = await response.json();
@@ -63,5 +64,5 @@ test('failed activation retains the guest ID and edits; retry publishes once wit
   expect(cloud.creations.filter((item) => item.title === 'Guest refresh regression'),
     'Retry must preserve one project identity, including private imports').toHaveLength(1);
   await page.reload();
-  await expect(page.locator('#dev-design-title')).toHaveValue('Guest refresh regression');
+  await expect(page.locator('#project-title')).toHaveValue('Guest refresh regression');
 });
