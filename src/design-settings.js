@@ -30,10 +30,10 @@ export function createDesignSettings(input = {}) {
   const gridPreset = normalizeGridPreset(input.gridPreset);
   const presetDimensions = getPresetDimensions(gridPreset);
   const width = gridPreset === 'custom'
-    ? clampInteger(input.width, 40, 2048, DEFAULT_SETTINGS.width)
+    ? clampInteger(input.width, 40, 3000, DEFAULT_SETTINGS.width)
     : presetDimensions.width;
   const height = gridPreset === 'custom'
-    ? clampInteger(input.height, 40, 2048, DEFAULT_SETTINGS.height)
+    ? clampInteger(input.height, 40, 3000, DEFAULT_SETTINGS.height)
     : presetDimensions.height;
 
   return {
