@@ -57,7 +57,7 @@ export function getPresetGroup(groups, groupId) {
 }
 
 export const RLE_LIMITS = Object.freeze({
-  dimensionMax: 2048,
+  dimensionMax: 3000,
   textBytesMax: 5_000_000,
   coordinateCollectionMax: 200_000,
 });
@@ -78,7 +78,7 @@ export function parseRle(input, {
 }
 
 // Direct board decoders use this scanner instead of parseRle(), so a valid
-// dense 2048×2048 import never first becomes millions of [x, y] arrays.
+// dense 3000×3000 import never first becomes millions of [x, y] arrays.
 export function forEachRleCell(input, onLiveCell, options = {}) {
   if (typeof onLiveCell !== 'function') throw new Error('RLE cell callback is required.');
   return scanRle(input, { ...options, maxCoordinates: null, onLiveCell });
@@ -190,7 +190,7 @@ function readHeader(header) {
   const height = Number(match[2]);
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)
     || width < 0 || height < 0 || width > RLE_LIMITS.dimensionMax || height > RLE_LIMITS.dimensionMax) {
-    throw new Error('RLE dimensions must be between 0 and 2048.');
+    throw new Error(`RLE dimensions must be between 0 and ${RLE_LIMITS.dimensionMax}.`);
   }
   return { width, height, rule: match[3] || 'B3/S23' };
 }
