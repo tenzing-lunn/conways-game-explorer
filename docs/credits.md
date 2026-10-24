@@ -21,3 +21,31 @@ Research references used to explain the constructions include Nicholas
 Carlini's gate article and the Myreen/Carneiro half-adder paper, both linked in
 the research handoff. Their references should be consulted for the original
 technical context and licensing terms of those publications.
+
+## Masterworks
+
+The Masterworks entries in `src/masterworks.js` reproduce famous large-scale
+Life discoveries. Cell data comes from the LifeWiki pattern archive
+(<https://conwaylife.com/patterns/>), whose content LifeWiki licenses under the
+GNU Free Documentation License 1.2 or later with attribution satisfied by a
+direct link back to the article. Each entry links its article; the cells are
+unchanged apart from rotating some spaceships to travel rightward and, for the
+Snark, adding a glider on its input lane. The quoted policy text, archive
+captures and measurements are in
+[`masterworks-provenance.md`](masterworks-provenance.md).
+
+Loadable patterns and their discoverers:
+
+- Simkin glider gun — Michael Simkin, 2015 — <https://conwaylife.com/wiki/Simkin_glider_gun>
+- Snark — Mike Playle, 2013 — <https://conwaylife.com/wiki/Snark>
+- Sir Robin — Adam P. Goucher and Tom Rokicki, 2018 — <https://conwaylife.com/wiki/Sir_Robin>
+- Copperhead — zdr, 2016 — <https://conwaylife.com/wiki/Copperhead>
+- Loafer — Josh Ball, 2013 — <https://conwaylife.com/wiki/Loafer>
+- Breeder 1 — Bill Gosper, 1971 — <https://conwaylife.com/wiki/Breeder_1>
+- Puffer 1 — Bill Gosper, 1971 — <https://conwaylife.com/wiki/Puffer_1>
+- 2-engine Cordership — praosylen, 2017 — <https://conwaylife.com/wiki/2-engine_Cordership>
+
+Reference-only entries (linked, no cell data shipped): OTCA metapixel (Brice
+Due, 2006), Gemini (Andrew J. Wade, 2010), 0E0P metacell (Adam P. Goucher,
+2018), Waterbear (Brett Berger and Ivan Fomichev, 2014) and LifeWiki's Pattern
+of the Year page.
