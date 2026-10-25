@@ -126,63 +126,98 @@ input.project-title:focus {
   color: var(--muted);
 }
 
-/* Gate chain */
-.chain-row,
-.chain-list {
+/* Circuit formula: one wrapping line of chips per output, read like algebra.
+   Input chips are white, gate chips paper; every chip opens a menu. */
+.formula-list {
+  display: grid;
+  gap: 8px;
+}
+
+.formula-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
 }
 
-.chain-row {
-  gap: 6px 10px;
+.formula-label {
+  font-weight: 500;
+  color: var(--muted);
+  margin-right: 2px;
+  white-space: nowrap;
 }
 
-.chain-chip {
+.formula-paren {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   height: 28px;
-  padding: 0 10px;
+  padding: 0 6px 0 10px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--bg);
   font-family: var(--mono);
   font-size: 12px;
   font-weight: 500;
+  color: var(--text);
+  transition: background var(--motion), border-color var(--motion), color var(--motion);
 }
 
-.chain-arrow {
-  font-size: 12px;
+.chip-input {
+  background: var(--surface);
+  font-weight: 600;
+}
+
+.chip-add {
+  gap: 4px;
+  padding: 0 10px 0 6px;
+  border-style: dashed;
+  font-family: var(--font);
   color: var(--muted);
 }
 
-.chain-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  margin-right: -5px;
-  border-radius: 50%;
-  color: var(--muted);
-  transition: background var(--motion), color var(--motion);
-}
-
-.chain-remove:hover:not(:disabled) {
+.chip:hover:not(:disabled) {
   background: var(--hover);
   color: var(--text);
 }
 
-.chain-remove .icon {
+.chip[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chip-caret {
   width: 12px;
   height: 12px;
   flex-basis: 12px;
+  color: var(--muted);
 }
 
-#add-gate-menu {
-  min-width: 120px;
+.chip[aria-expanded="true"] .chip-caret {
+  color: var(--accent);
+}
+
+/* One floating menu for every chip; fixed so it escapes the inspector's
+   scroll and the phone sheet's transform. */
+.chip-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  min-width: 180px;
+}
+
+.menu-divider {
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
 }
 
 .switch {
@@ -420,11 +455,23 @@ input.project-title:focus {
     gap: 6px;
   }
 
-  /* Keep the × glyph small but give it a 40px hit area inside the chip row. */
-  .chain-remove {
-    width: 40px;
+  .chip {
     height: 40px;
-    margin: -6px -16px -6px -8px;
+    padding: 0 8px 0 12px;
+    font-size: 13px;
+  }
+
+  .chip-add {
+    padding: 0 12px 0 8px;
+  }
+
+  .formula-row {
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  .formula-paren {
+    font-size: 16px;
   }
 
   .inspector {

@@ -11,7 +11,31 @@ import {
 } from './life.js';
 import { boardFromRle, boardToRle, createBoardHistory, copySelection, pasteSelection, transformSelection } from './board-tools.js';
 import { createSimulationClient } from './simulation-client.js';
-import { buildCircuitChain, buildCircuitExperiment, circuitExperiments, readCircuitOutputs, validateCircuitChain } from './circuits.js';
+import {
+  CIRCUIT_MAX_GATES,
+  buildCircuit,
+  buildCircuitExperiment,
+  circuitExperiments,
+  circuitPresets,
+  readCircuitOutputs,
+  validateCircuit,
+} from './circuits.js';
+import {
+  INPUT_NAMES,
+  countSpecGates,
+  describeSpec,
+  getSpecInputs,
+  growLeaf,
+  isGateNode,
+  isInputNode,
+  normalizeCircuitSpec,
+  removeGate,
+  setInputValue,
+  setLeafInput,
+  treeToChain,
+  wrapOutput,
+} from './circuit-spec.js';
+import { decodeMasterwork, getMasterwork, loadMasterwork as loadMasterworkCells, masterworks } from './masterworks.js';
 import { createCommunityRepository, migrateLocalState } from './community-repository.js';
 import {
   addCreationComment,
@@ -63,10 +87,15 @@ const WORLD_HEIGHT = 200;
 const LOCAL_RECOVERY_KEY = 'life-logic-dev-recovery-v1';
 const THEME_KEY = 'life-theme';
 const BASE_CELL_SIZE = 10;
+// The manual zoom floor for ordinary boards; a board too big to fit at this
+// floor lowers it (see getMinZoom) so Fit always succeeds.
 const MIN_ZOOM = 0.1;
-// A circuit fit may go lower than manual zoom so a whole chain still shows.
-const CIRCUIT_MIN_ZOOM = 0.04;
 const MAX_ZOOM = 3.6;
+// Below this on-screen cell size, cells are drawn through a downsampled bitmap
+// where a pixel lights when any cell under it is alive.
+const BITMAP_CELL_SIZE = 1.5;
+// Masterworks wider than this get a size badge instead of a thumbnail.
+const THUMBNAIL_MAX_WIDTH = 200;
 const MAX_MAIN_THREAD_CATCH_UP_STEPS = 4;
 const SPEED_STEPS = [1, 2, 5, 10, 20, 40];
 const MOBILE_QUERY = window.matchMedia('(max-width: 899px)');
@@ -112,6 +141,11 @@ const GATE_CARDS = {
   not: { name: 'NOT', note: 'Outputs a signal only when input A is absent' },
   'half-adder': { name: 'Half-adder', note: 'Adds two bits. Outputs Sum and Carry.' },
 };
+
+// The Library's last group: famous large patterns from masterworks.js.
+const MASTERWORKS_GROUP = { id: 'masterworks', title: 'Masterworks' };
+
+const PORT_ARROWS = { west: '→', south: '↑', north: '↓', east: '←' };
 
 // Publish readiness in plain words, keyed by the shared validator's field:code.
 const PUBLISH_ISSUE_COPY = {
@@ -213,11 +247,9 @@ const elements = {
   edges: $('#edges'),
   circuitSection: $('#circuit-section'),
   circuitName: $('#circuit-name'),
-  chainRow: $('#chain-row'),
-  chainList: $('#chain-list'),
+  formulaList: $('#formula-list'),
   chainNote: $('#chain-note'),
-  addGate: $('#add-gate'),
-  addGateMenu: $('#add-gate-menu'),
+  chipMenu: $('#chip-menu'),
   inputsList: $('#inputs-list'),
   outputsList: $('#outputs-list'),
   runCircuit: $('#run-circuit'),
@@ -289,6 +321,9 @@ let feedbackTimer = null;
 let recoveryTimer = null;
 let palette = {};
 const gateThumbnailCache = new Map();
+const masterworkThumbnailCache = new Map();
+// Downsampled bitmap of the visible cells, reused while nothing it shows changes.
+const bitmap = { canvas: null, context: null, image: null, pixels: null, key: '' };
 
 const state = {
   board: createBoard(DEFAULT_DESIGN_SETTINGS.width, DEFAULT_DESIGN_SETTINGS.height),
@@ -297,10 +332,16 @@ const state = {
   clipboard: null,
   selection: null,
   circuit: null,
-  circuitInputs: {},
+  // The normalized circuit spec the inspector edits; circuit is its build.
+  circuitSpec: null,
   circuitOutputs: null,
   circuitRunning: false,
+  circuitRate: 0,
+  chipMenu: null,
+  masterworkLoading: null,
   truthRows: null,
+  // Bumped whenever cells change in place (drawing), so cached bitmaps refresh.
+  boardRevision: 0,
   simulation: null,
   simulationLoad: null,
   selectedPreset: null,
@@ -1043,18 +1084,27 @@ function undoBoard() {
   if (state.playing) return;
   const previous = state.history.undo(ownedSnapshot());
   if (!previous) return;
-  replaceBoard(previous);
-  state.authoredStart = ownedSnapshot(previous);
-  markDesignDirty(true);
-  updateHistoryControls();
+  restoreHistoryBoard(previous);
 }
 
 function redoBoard() {
   if (state.playing) return;
   const next = state.history.redo(ownedSnapshot());
   if (!next) return;
-  replaceBoard(next);
-  state.authoredStart = ownedSnapshot(next);
+  restoreHistoryBoard(next);
+}
+
+// A history entry may have a different size (a masterwork grew the board, or
+// the grid was resized); the settings and the view follow it.
+function restoreHistoryBoard(board) {
+  const resized = board.width !== state.board.width || board.height !== state.board.height;
+  replaceBoard(board);
+  state.authoredStart = ownedSnapshot(board);
+  if (resized) {
+    state.designSettings = mergeDesignSettings(state.designSettings, { gridPreset: 'custom', width: board.width, height: board.height });
+    syncDesignControls();
+    fitBoard();
+  }
   markDesignDirty(true);
   updateHistoryControls();
 }
@@ -1126,7 +1176,7 @@ function scheduleLocalRecovery() {
         generation: 0,
         population: authored.population,
         settings: getCurrentDesignSettings(studio),
-        circuit: getCircuitSpec(studio.circuit),
+        circuit: getCircuitSpec(studio.circuitSpec),
         savedAt: new Date().toISOString(),
       };
       await writeRecovery(LOCAL_RECOVERY_KEY, recovery);
@@ -1224,6 +1274,11 @@ function resizeBoardKeepingCells(width, height) {
 
 function applyGridSizeChoice(gridPreset) {
   const next = mergeDesignSettings(state.designSettings, { gridPreset });
+  applyBoardSize(next);
+}
+
+// Resize the board keeping its cells (an undoable command), then refit.
+function applyBoardSize(next) {
   if (next.width === state.board.width && next.height === state.board.height) return;
   const gateBoard = state.circuit?.board;
   if (gateBoard && (next.width < gateBoard.width || next.height < gateBoard.height)) {
@@ -1691,46 +1746,112 @@ function renderVersionHistory(creation) {
  * Circuits (Studio → Logic)
  * ------------------------------------------------------------------------- */
 
-// A circuit is a list of gate ids: AND/OR/NOT chain left to right (one gate is
-// cell-for-cell the single-gate experiment); the half-adder stays standalone.
-function circuitGates(experiment = state.circuit) {
-  return experiment ? experiment.gates || [experiment.id] : [];
+// A circuit is a spec from circuit-spec.js: a tree of AND/OR/NOT gates per
+// output (a plain chain is the simplest tree), or the standalone half-adder.
+// state.circuitSpec holds the normalized spec; state.circuit its build.
+
+// The legacy gate list when the spec is a plain left-to-right chain, for the
+// test snapshot and the rail cards; the half-adder reads as its own gate.
+function circuitGates(spec = state.circuitSpec) {
+  if (!spec) return [];
+  if (spec.kind === 'half-adder') return ['half-adder'];
+  if (spec.kind !== 'tree' || spec.outputs.length !== 1) return [];
+  return treeToChain(spec.outputs[0].tree) || [];
 }
 
-function buildCircuit(gates, inputs) {
-  return gates[0] === 'half-adder' ? buildCircuitExperiment('half-adder', inputs) : buildCircuitChain({ gates, inputs });
+// What Studio persists in previewConfig.circuit. Trees keep their normalized
+// form; the half-adder keeps the gate-list form every reader accepts.
+function getCircuitSpec(spec = state.circuitSpec) {
+  if (!spec) return null;
+  if (spec.kind === 'half-adder') return { gates: ['half-adder'], inputs: { ...spec.inputs } };
+  return { outputs: spec.outputs.map((output) => ({ id: output.id, label: output.label, tree: output.tree })), inputs: { ...spec.inputs } };
 }
 
-function getCircuitSpec(experiment = state.circuit) {
-  return experiment ? { gates: circuitGates(experiment), inputs: { ...experiment.inputs } } : null;
+// The contract form circuits.js reads: a normalized spec goes back to the
+// gate-list form for the half-adder, { outputs, inputs } for a tree, and
+// { preset, inputs } for a preset; anything else is already a contract form.
+function contractSpec(spec) {
+  if (spec?.kind === 'half-adder') return { gates: ['half-adder'], inputs: { ...spec.inputs } };
+  if (spec?.kind === 'tree') return getCircuitSpec(spec);
+  if (spec?.kind === 'preset') return { preset: spec.id, inputs: { ...spec.inputs } };
+  return spec;
 }
 
-// Tiles and input ports to draw and label. Only the half-adder lacks them;
-// both of its inputs enter from the west.
+function validateSpec(spec) {
+  try {
+    return validateCircuit(contractSpec(spec));
+  } catch (error) {
+    return { ok: false, reason: getErrorMessage(error) };
+  }
+}
+
+function buildSpec(spec) {
+  return buildCircuit(contractSpec(spec));
+}
+
+// Presets persist as the tree they expand to, so a saved preset reopens as an
+// editable circuit even if the preset list changes later.
+function expandCircuitSpec(spec) {
+  const normalized = normalizeCircuitSpec(spec);
+  if (normalized.kind !== 'preset') return normalized;
+  const preset = circuitPresets.find((entry) => entry.id === normalized.id);
+  if (!preset) throw new Error(`Unknown circuit "${normalized.id}".`);
+  return normalizeCircuitSpec({ ...preset.spec, inputs: normalized.inputs });
+}
+
+// The rail card that matches the open circuit, if any: a single gate, the
+// half-adder, or an unedited preset.
+function circuitCardId(spec = state.circuitSpec) {
+  if (!spec) return null;
+  if (spec.kind === 'half-adder') return 'half-adder';
+  const gates = circuitGates(spec);
+  if (gates.length === 1) return gates[0];
+  const formula = describeSpec(spec).join('|');
+  return circuitPresets.find((preset) => describeSpec(preset.spec).join('|') === formula)?.id || null;
+}
+
+// Everything the renderer labels: gate tiles and the external input ports.
+// Only the half-adder lacks tiles; both of its inputs enter from the west.
 function getCircuitGeometry(experiment) {
-  if (experiment.tiles) return { tiles: experiment.tiles, ports: experiment.ports.filter((port) => port.type === 'input') };
+  if (experiment.tiles) {
+    const ports = experiment.ports?.filter((port) => port.type === 'input')
+      || experiment.tiles.flatMap((tile) => tile.inputs.map((input) => ({ type: 'input', tileIndex: tile.index, ...input })));
+    return { tiles: experiment.tiles, ports };
+  }
   const { origin, tile, lanes } = getCircuitMarkers(experiment.id);
   return {
-    tiles: [{ gateId: experiment.id, x: origin.x, y: origin.y, width: tile, height: tile }],
+    tiles: [{ gateId: experiment.id, index: 0, x: origin.x, y: origin.y, width: tile, height: tile }],
     ports: lanes.map((lane) => ({ tileIndex: 0, name: lane.id, side: 'west', x: origin.x, y: lane.y })),
   };
 }
 
+// Short lamp and probe label for an output: the formula line already shows
+// the expression, so the lamp just names the output.
+function outputLabel(port) {
+  if (state.circuitSpec?.kind === 'tree') {
+    return state.circuitSpec.outputs.find((output) => output.id === port.id)?.label || port.label;
+  }
+  return port.label;
+}
+
 function exitCircuit() {
+  closeChipMenu();
   if (!state.circuit) return;
   state.circuit = null;
+  state.circuitSpec = null;
   state.circuitOutputs = null;
   state.truthRows = null;
   updatePresetSelection();
 }
 
-function openCircuit(gates, { fit = true, inputs = null } = {}) {
-  const key = gates.join('>');
-  state.circuitInputs[key] = inputs || state.circuitInputs[key] || {};
-  const experiment = buildCircuit(gates, state.circuitInputs[key]);
+function openCircuit(spec, { fit = true } = {}) {
+  const normalized = expandCircuitSpec(spec);
+  const experiment = buildSpec(normalized);
+  closeChipMenu();
+  state.circuitSpec = normalized;
   state.circuit = experiment;
   state.circuitOutputs = null;
-  if (state.truthRows?.id !== experiment.id) state.truthRows = null;
+  if (state.truthRows?.key !== truthKey(normalized)) state.truthRows = null;
   state.designSettings = mergeDesignSettings(state.designSettings, {
     gridPreset: 'custom',
     width: experiment.board.width,
@@ -1749,6 +1870,12 @@ function openCircuit(gates, { fit = true, inputs = null } = {}) {
   renderInspector();
 }
 
+// A measured truth table stays valid while the gates stay the same; flipping
+// switches does not discard it.
+function truthKey(spec) {
+  return spec ? describeSpec(contractSpec(spec)).join('|') : '';
+}
+
 function fitCircuit({ deferred = false } = {}) {
   if (!state.circuit) return;
   if (deferred || !canvas.clientWidth) {
@@ -1760,8 +1887,6 @@ function fitCircuit({ deferred = false } = {}) {
   }
   const experiment = state.circuit;
   const { tiles, ports } = getCircuitGeometry(experiment);
-  const first = tiles[0];
-  const last = tiles[tiles.length - 1];
   const viewport = getWorldViewport();
   // On phones the tool strip floats over the top of the canvas; fit below it.
   const inset = circuitTopInset();
@@ -1771,42 +1896,66 @@ function fitCircuit({ deferred = false } = {}) {
   ctx.save();
   ctx.font = markerFont();
   const westPx = ctx.measureText('A →').width + 14;
-  const labelPx = Math.max(...experiment.outputs.map((port) => ctx.measureText(port.label).width)) + 12;
+  const labelPx = Math.max(...experiment.outputs.map((port) => ctx.measureText(outputLabel(port)).width)) + 12;
   ctx.restore();
-  // Must-see: the tiles (labels sit 16px above them) and the probe box.
-  const left = first.x;
-  const width = last.x + last.width - left + 8;
-  const mustHeight = first.height + 4;
-  // Full: the must-see plus the lanes down to the lowest queued packet.
-  let bottom = first.y + first.height + (experiment.tiles ? 56 : 16);
+  // Must-see: every tile (labels sit 16px above the top row), every probe box
+  // and every port where a lane enters a tile.
+  const must = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
+  const include = (x, y, w = 0, h = 0) => {
+    must.left = Math.min(must.left, x);
+    must.top = Math.min(must.top, y);
+    must.right = Math.max(must.right, x + w);
+    must.bottom = Math.max(must.bottom, y + h);
+  };
+  for (const tile of tiles) include(tile.x, tile.y, tile.width, tile.height);
+  for (const port of experiment.outputs) include(port.x - Math.floor(port.width / 2), port.y - Math.floor(port.height / 2), port.width, port.height);
+  for (const port of ports) include(port.x, port.y);
+  must.right += 8;
+  // Full: the must-see plus each active lane out to its farthest queued packet.
+  const full = { ...must };
   const board = experiment.authoredBoard;
-  for (const port of ports) {
-    if (port.side !== 'south' || !experiment.inputs?.[port.name]) continue;
-    const column = Math.floor(port.x);
-    for (let y = board.height - 1; y > bottom; y -= 1) {
-      let live = false;
-      for (let x = column - 4; x <= column + 4 && !live; x += 1) live = board.cells[y * board.width + x] === 1;
-      if (live) { bottom = y + 8; break; }
+  const liveAcross = (fixed, from, to, horizontal) => {
+    const step = from < to ? 1 : -1;
+    for (let along = from; step > 0 ? along <= to : along >= to; along += step) {
+      for (let offset = -4; offset <= 4; offset += 1) {
+        const x = horizontal ? along : fixed + offset;
+        const y = horizontal ? fixed + offset : along;
+        if (x >= 0 && y >= 0 && x < board.width && y < board.height && board.cells[y * board.width + x] === 1) return along;
+      }
     }
+    return null;
+  };
+  for (const port of ports) {
+    if (!experiment.inputs?.[port.name]) continue;
+    const px = Math.floor(port.x);
+    const py = Math.floor(port.y);
+    if (port.side === 'south') { const y = liveAcross(px, board.height - 1, must.bottom + 1, false); if (y !== null) full.bottom = Math.max(full.bottom, y + 8); }
+    if (port.side === 'north') { const y = liveAcross(px, 0, must.top - 1, false); if (y !== null) full.top = Math.min(full.top, y - 8); }
+    if (port.side === 'east') { const x = liveAcross(py, board.width - 1, must.right + 1, true); if (x !== null) full.right = Math.max(full.right, x + 8); }
   }
-  const zoomFor = (heightCells, padX, padY) => Math.min(1,
-    (viewport.width - 2 * padX - westPx - labelPx) / (width * BASE_CELL_SIZE),
-    (available - 2 * padY) / (heightCells * BASE_CELL_SIZE));
-  const fullZoom = zoomFor(bottom - first.y, 16, 24);
+  if (full.bottom === must.bottom) full.bottom = must.bottom + (experiment.tiles ? 56 : 16);
+  const zoomFor = (region, padX, padY) => Math.min(1,
+    (viewport.width - 2 * padX - westPx - labelPx) / ((region.right - region.left) * BASE_CELL_SIZE),
+    (available - 2 * padY) / ((region.bottom - region.top) * BASE_CELL_SIZE));
+  const fullZoom = zoomFor(full, 16, 24);
   let zoom;
+  let region;
   let panY;
   if (fullZoom >= 0.06) {
     zoom = fullZoom;
-    panY = inset + (available - (bottom - first.y) * zoom * BASE_CELL_SIZE) / 2 - first.y * zoom * BASE_CELL_SIZE;
+    region = full;
+    panY = inset + (available - (full.bottom - full.top) * zoom * BASE_CELL_SIZE) / 2 - full.top * zoom * BASE_CELL_SIZE;
   } else {
     // Too tall to fit whole: keep the tiles and labels at the top with 16px
     // padding and let the lanes run off the bottom.
-    zoom = Math.max(CIRCUIT_MIN_ZOOM, zoomFor(mustHeight, 8, 16));
-    panY = inset + 32 - first.y * zoom * BASE_CELL_SIZE;
+    zoom = Math.max(getMinZoom(), zoomFor({ ...must, bottom: must.bottom + 4 }, 8, 16));
+    region = must;
+    panY = inset + 32 - must.top * zoom * BASE_CELL_SIZE;
   }
   const cellSize = zoom * BASE_CELL_SIZE;
+  const width = region.right - region.left;
   state.zoom = zoom;
-  state.panX = (viewport.width - (westPx + width * cellSize + labelPx)) / 2 + westPx - left * cellSize;
+  state.panX = (viewport.width - (westPx + width * cellSize + labelPx)) / 2 + westPx - region.left * cellSize;
   state.panY = panY;
   elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
 }
@@ -1822,23 +1971,42 @@ function markerFont() {
 }
 
 function setCircuitInput(name, value) {
-  if (!state.circuit) return;
-  const gates = circuitGates();
-  state.circuitInputs[gates.join('>')][name] = Boolean(value);
+  if (!state.circuitSpec || state.circuitRunning) return;
   // Refit: an input train appears or disappears, and the fit follows it.
-  openCircuit(gates);
+  openCircuit(setInputValue(contractSpec(state.circuitSpec), name, value));
 }
 
-function changeChain(gates) {
-  if (!state.circuit || state.circuitRunning || !validateCircuitChain(gates).ok) return;
-  openCircuit(gates, { inputs: { ...state.circuit.inputs } });
+// Apply an edit from the formula chips; invalid results are refused quietly
+// because the menu already disabled them.
+function editCircuit(nextSpec) {
+  if (!state.circuitSpec || state.circuitRunning) return;
+  const validation = validateSpec(nextSpec);
+  if (!validation.ok) {
+    showToast(validation.reason, { kind: 'error' });
+    return;
+  }
+  openCircuit(nextSpec);
 }
 
-// Rebuild a saved or recovered circuit from its { gates, inputs } spec.
+// The spec an edit would produce, or null when the edit is not possible.
+function tryEdit(apply) {
+  try {
+    return apply(state.circuitSpec);
+  } catch {
+    return null;
+  }
+}
+
+// Rebuild a saved or recovered circuit from any spec form the contract accepts.
 function restoreCircuit(spec) {
-  if (!Array.isArray(spec?.gates) || !spec.gates.length) return;
-  if (spec.gates[0] !== 'half-adder' && !validateCircuitChain(spec.gates).ok) return;
-  openCircuit(spec.gates, { fit: false, inputs: { ...(spec.inputs || {}) } });
+  if (!spec || typeof spec !== 'object') return;
+  try {
+    const expanded = expandCircuitSpec(spec);
+    if (!validateSpec(expanded).ok) return;
+    openCircuit(expanded, { fit: false });
+  } catch {
+    return;
+  }
   fitCircuit({ deferred: true });
 }
 
@@ -1866,7 +2034,7 @@ async function runCircuitExperiment() {
     state.board = ownedSnapshot(snapshot);
     state.circuitOutputs = readCircuitOutputs(experiment, state.board);
     updateStats();
-    const summary = state.circuitOutputs.map((output) => `${output.label}: ${output.high ? 'HIGH' : 'LOW'}`).join(' · ');
+    const summary = state.circuitOutputs.map((output) => `${outputLabel(output)}: ${output.high ? 'HIGH' : 'LOW'}`).join(' · ');
     showToast(summary, { kind: 'success' });
   } catch (error) {
     if (error?.name !== 'AbortError') showToast(`Run stopped: ${getErrorMessage(error)}`, { kind: 'error' });
@@ -1877,22 +2045,43 @@ async function runCircuitExperiment() {
   }
 }
 
+function circuitInputNames(spec = state.circuitSpec) {
+  return spec ? getSpecInputs(contractSpec(spec)) : [];
+}
+
+// Rough wall-clock estimate for running every input combination, from the
+// rate measured on the last run (or a conservative default).
+function truthTableEstimate(spec = state.circuitSpec, experiment = state.circuit) {
+  const rows = 2 ** circuitInputNames(spec).length;
+  const rate = state.circuitRate || 1500;
+  const seconds = Math.max(1, Math.round((rows * experiment.observeGeneration) / rate));
+  const time = seconds < 90 ? `about ${seconds} seconds` : `about ${Math.max(2, Math.round(seconds / 60))} minutes`;
+  return { rows, seconds, text: `${rows} rows, ${time}` };
+}
+
 async function fillTruthTable() {
   if (!state.circuit || state.circuitRunning) return;
   const experiment = state.circuit;
-  const gates = circuitGates(experiment);
-  const rows = getInputCombinations(experiment.inputs ? Object.keys(experiment.inputs) : []);
+  const spec = state.circuitSpec;
+  const names = circuitInputNames(spec);
+  const estimate = truthTableEstimate(spec, experiment);
+  if (names.length > 4 && !window.confirm(`Run all ${estimate.rows} combinations? That takes ${estimate.text.replace(/^\d+ rows, /, '')}.`)) return;
+  const rows = getInputCombinations(names);
   state.circuitRunning = true;
-  state.truthRows = { id: experiment.id, rows: rows.map((inputs) => ({ inputs, outputs: null })), current: 0, generation: 0 };
+  state.truthRows = { key: truthKey(spec), rows: rows.map((inputs) => ({ inputs, outputs: null })), current: 0, generation: 0 };
   state.playing = false;
   updatePlayButton();
   renderInspector();
+  const started = performance.now();
+  let generations = 0;
   try {
     for (const row of state.truthRows.rows) {
       state.truthRows.current += 1;
       state.truthRows.generation = 0;
       renderRunProgress();
-      const built = buildCircuit(gates, row.inputs);
+      let rowSpec = spec;
+      for (const [name, value] of Object.entries(row.inputs)) rowSpec = setInputValue(contractSpec(rowSpec), name, value);
+      const built = buildSpec(rowSpec);
       await state.simulation.load(ownedSnapshot(built.board), { wrapping: false });
       const board = await state.simulation.advance(built.observeGeneration, {
         onSnapshot: (snapshot) => {
@@ -1900,9 +2089,11 @@ async function fillTruthTable() {
           renderRunProgress();
         },
       });
+      generations += built.observeGeneration;
       row.outputs = readCircuitOutputs(built, board);
       renderTruthTable();
     }
+    state.circuitRate = Math.max(1, generations / ((performance.now() - started) / 1000));
     showToast('Truth table complete', { kind: 'success' });
   } catch (error) {
     if (error?.name !== 'AbortError') showToast(`Run stopped: ${getErrorMessage(error)}`, { kind: 'error' });
@@ -1910,7 +2101,7 @@ async function fillTruthTable() {
     state.circuitRunning = false;
     // Put the authored experiment back on the board and in the worker (unless
     // the user has since switched to the Playground board).
-    if (state.circuit === experiment) openCircuit(gates, { fit: false });
+    if (state.circuit === experiment) openCircuit(spec, { fit: false });
   }
 }
 
@@ -1920,19 +2111,27 @@ function renderInspector() {
   renderVersionHistory(getActiveCreation());
   if (!experiment) return;
 
-  const gates = circuitGates(experiment);
-  const card = GATE_CARDS[gates[0]] || { name: experiment.title };
-  elements.circuitName.textContent = gates.length > 1 ? 'Each gate feeds the next.' : `${card.name}: ${card.note || experiment.description}`;
-  renderChainRow(experiment);
+  const spec = state.circuitSpec;
+  const cardId = circuitCardId(spec);
+  const card = GATE_CARDS[cardId] || circuitPresets.find((preset) => preset.id === cardId);
+  const gateCount = spec.kind === 'tree' ? countSpecGates(spec) : 1;
+  elements.circuitName.textContent = card
+    ? `${card.name || card.title}: ${card.note || card.description}`
+    : `${gateCount} gates. Choose any part of the formula to change it.`;
+  renderFormula(spec);
 
   const { tiles, ports } = getCircuitGeometry(experiment);
   elements.inputsList.innerHTML = '';
-  for (const [name, value] of Object.entries(experiment.inputs || {})) {
-    const port = ports.find((candidate) => candidate.name === name);
-    const entry = port ? `${port.side === 'west' ? '→' : '↑'} ${GATE_CARDS[tiles[port.tileIndex].gateId]?.name || ''}` : '';
+  for (const name of circuitInputNames(spec)) {
+    const entries = [];
+    for (const port of ports) {
+      if (port.name !== name) continue;
+      const entry = `${PORT_ARROWS[port.side] || '→'} ${GATE_CARDS[tiles[port.tileIndex]?.gateId]?.name || String(tiles[port.tileIndex]?.gateId || '').toUpperCase()}`;
+      if (!entries.includes(entry)) entries.push(entry);
+    }
     const row = document.createElement('label');
     row.className = 'switch-row';
-    row.innerHTML = `<span>${name.toUpperCase()}<small>${entry}</small></span><input class="switch" type="checkbox" role="switch" data-input="${name}" aria-label="Input ${name.toUpperCase()}" ${value ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
+    row.innerHTML = `<span>${name.toUpperCase()}<small>${escapeHtml(entries.join(' · '))}</small></span><input class="switch" type="checkbox" role="switch" data-input="${name}" aria-label="Input ${name.toUpperCase()}" ${spec.inputs[name] ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
     elements.inputsList.append(row);
   }
 
@@ -1942,7 +2141,7 @@ function renderInspector() {
     const lampState = getLampState(output);
     const row = document.createElement('div');
     row.className = 'lamp-row';
-    row.innerHTML = `<span>${escapeHtml(port.label)}</span><span class="lamp" data-output="${port.id}" data-state="${lampState}">${getLampLabel(lampState)}</span>`;
+    row.innerHTML = `<span>${escapeHtml(outputLabel(port))}</span><span class="lamp" data-output="${port.id}" data-state="${lampState}">${getLampLabel(lampState)}</span>`;
     elements.outputsList.append(row);
   }
 
@@ -1953,21 +2152,120 @@ function renderInspector() {
   renderTruthTable();
 }
 
-function renderChainRow(experiment) {
-  const gates = circuitGates(experiment);
-  elements.chainRow.hidden = !experiment.tiles;
-  if (!experiment.tiles) {
+// The circuit as formula lines built from chips: "OUT = (A AND B) OR C".
+// Every chip opens a menu (inputs: reuse a letter or grow a gate here; gates:
+// remove); "Add gate" at the end wraps the whole expression.
+function renderFormula(spec) {
+  const editable = spec.kind === 'tree';
+  elements.formulaList.hidden = !editable;
+  if (!editable) {
     elements.chainNote.hidden = false;
     elements.chainNote.textContent = 'Standalone component.';
     return;
   }
-  elements.chainList.innerHTML = gates.map((id, index) => `${index ? '<span class="chain-arrow" aria-hidden="true">→</span>' : ''}<span class="chain-chip" data-chain-gate="${id}">${GATE_CARDS[id].name}${gates.length > 1
-    ? `<button class="chain-remove" type="button" data-remove-gate="${index}" aria-label="Remove ${GATE_CARDS[id].name}" ${state.circuitRunning ? 'disabled' : ''}><svg class="icon" aria-hidden="true"><use href="#i-close" /></svg></button>`
-    : ''}</span>`).join('');
-  const canAdd = validateCircuitChain([...gates, 'and']).ok;
-  elements.addGate.disabled = !canAdd || state.circuitRunning;
+  const disabled = state.circuitRunning ? ' disabled' : '';
+  elements.formulaList.innerHTML = spec.outputs.map((output, outputIndex) => `<div class="formula-row" data-output-index="${outputIndex}">`
+    + `<span class="formula-label">${escapeHtml(output.label)} =</span>`
+    + formulaHtml(output.tree, outputIndex, [], disabled)
+    + `<button class="chip chip-add" id="add-gate-${escapeHtml(output.id)}" type="button" data-chip="add" data-output="${outputIndex}" aria-haspopup="menu" aria-expanded="false"${disabled}>`
+    + '<svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg><span>Add gate</span></button>'
+    + '</div>').join('');
+  const cap = tryEdit((current) => wrapOutput(current, 0, 'and'));
+  const canAdd = Boolean(cap) && validateSpec(cap).ok;
   elements.chainNote.hidden = canAdd;
-  elements.chainNote.textContent = canAdd ? '' : 'Up to 3 gates.';
+  elements.chainNote.textContent = canAdd ? '' : circuitLimitNote(cap);
+}
+
+// Plain words for why a gate cannot be added anywhere right now.
+function circuitLimitNote(attempt) {
+  if (!attempt) return `All ${INPUT_NAMES.length} inputs are in use.`;
+  if (countSpecGates(attempt) > CIRCUIT_MAX_GATES) return `Up to ${CIRCUIT_MAX_GATES} gates.`;
+  return validateSpec(attempt).reason || `Up to ${CIRCUIT_MAX_GATES} gates.`;
+}
+
+function formulaHtml(node, outputIndex, path, disabled) {
+  const chip = (kind, label, extra) => `<button class="chip chip-${kind}" type="button" data-chip="${kind}" data-output="${outputIndex}" data-path="${path.join('.')}" ${extra} aria-haspopup="menu" aria-expanded="false"${disabled}>${label}<svg class="icon chip-caret" aria-hidden="true"><use href="#i-chevron" /></svg></button>`;
+  if (isInputNode(node)) return chip('input', node.input.toUpperCase(), `data-input="${node.input}"`);
+  const operand = (child, step) => (isInputNode(child)
+    ? formulaHtml(child, outputIndex, [...path, step], disabled)
+    : `<span class="formula-paren" aria-hidden="true">(</span>${formulaHtml(child, outputIndex, [...path, step], disabled)}<span class="formula-paren" aria-hidden="true">)</span>`);
+  const gate = chip('gate', node.gate.toUpperCase(), `data-gate="${node.gate}"`);
+  if (node.gate === 'not') return `${gate}${operand(node.a, 'a')}`;
+  return `${operand(node.a, 'a')}${gate}${operand(node.b, 'b')}`;
+}
+
+// One floating menu serves every chip; it is positioned under the chip that
+// opened it and lists only the edits that can be built.
+function openChipMenu(chip) {
+  const spec = state.circuitSpec;
+  if (!spec || state.circuitRunning) return;
+  const outputIndex = Number(chip.dataset.output);
+  const path = chip.dataset.path ? chip.dataset.path.split('.') : [];
+  const kind = chip.dataset.chip;
+  const items = [];
+  const option = (action, value, label, candidate) => {
+    const ok = Boolean(candidate) && validateSpec(candidate).ok;
+    items.push(`<button type="button" role="menuitem" data-chip-action="${action}" data-value="${value}"${ok ? '' : ' disabled'} ${ok ? '' : `title="${escapeHtml(circuitLimitNote(candidate))}"`}>${label}</button>`);
+  };
+  if (kind === 'input') {
+    const used = circuitInputNames(spec);
+    const highest = Math.max(...used.map((name) => INPUT_NAMES.indexOf(name)));
+    for (const name of INPUT_NAMES.slice(0, Math.min(INPUT_NAMES.length, highest + 2))) {
+      if (name === chip.dataset.input) continue;
+      option('use', name, `Use ${name.toUpperCase()}${used.includes(name) ? '' : ' (new)'}`, tryEdit((current) => setLeafInput(current, outputIndex, path, name)));
+    }
+    items.push('<hr class="menu-divider" />');
+    for (const gate of ['and', 'or', 'not']) {
+      option('grow', gate, `Replace with ${gate.toUpperCase()}`, tryEdit((current) => growLeaf(current, outputIndex, path, gate)));
+    }
+  } else if (kind === 'gate') {
+    option('remove', '', 'Remove this gate', tryEdit((current) => removeGate(current, outputIndex, path)));
+  } else {
+    for (const gate of ['and', 'or', 'not']) {
+      option('wrap', gate, gate.toUpperCase(), tryEdit((current) => wrapOutput(current, outputIndex, gate)));
+    }
+  }
+  closeMenus();
+  state.chipMenu = { outputIndex, path, kind, chip };
+  elements.chipMenu.innerHTML = items.join('');
+  elements.chipMenu.hidden = false;
+  chip.setAttribute('aria-expanded', 'true');
+  positionChipMenu();
+  elements.chipMenu.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
+}
+
+// Under the chip, or above it when there is no room below; always on screen.
+function positionChipMenu() {
+  const chip = state.chipMenu?.chip;
+  if (!chip) return;
+  const rect = chip.getBoundingClientRect();
+  const menu = elements.chipMenu.getBoundingClientRect();
+  const left = Math.max(8, Math.min(window.innerWidth - menu.width - 8, rect.left));
+  const below = rect.bottom + 6 + menu.height <= window.innerHeight - 8;
+  elements.chipMenu.style.left = `${Math.round(left)}px`;
+  elements.chipMenu.style.top = `${Math.round(below ? rect.bottom + 6 : Math.max(8, rect.top - 6 - menu.height))}px`;
+}
+
+function closeChipMenu() {
+  if (!state.chipMenu) return;
+  state.chipMenu.chip?.setAttribute('aria-expanded', 'false');
+  state.chipMenu = null;
+  elements.chipMenu.hidden = true;
+}
+
+function applyChipAction(action, value) {
+  const open = state.chipMenu;
+  if (!open) return;
+  const { outputIndex, path } = open;
+  closeChipMenu();
+  const next = tryEdit((current) => {
+    if (action === 'use') return setLeafInput(current, outputIndex, path, value);
+    if (action === 'grow') return growLeaf(current, outputIndex, path, value);
+    if (action === 'remove') return removeGate(current, outputIndex, path);
+    if (action === 'wrap') return wrapOutput(current, outputIndex, value);
+    return null;
+  });
+  if (next) editCircuit(next);
 }
 
 function renderRunProgress() {
@@ -1990,21 +2288,24 @@ function renderRunProgress() {
 function renderTruthTable() {
   const experiment = state.circuit;
   if (!experiment) return;
-  const inputNames = Object.keys(experiment.inputs || {});
+  const inputNames = circuitInputNames();
   const outputs = experiment.outputs;
-  const rows = state.truthRows?.id === experiment.id
+  const measured = state.truthRows?.key === truthKey(state.circuitSpec);
+  const rows = measured
     ? state.truthRows.rows
     : getInputCombinations(inputNames).map((inputs) => ({ inputs, outputs: null }));
-  const header = `<tr>${inputNames.map((name) => `<th scope="col">${name.toUpperCase()}</th>`).join('')}${outputs.map((port) => `<th scope="col">${escapeHtml(port.label)}</th>`).join('')}</tr>`;
+  const header = `<tr>${inputNames.map((name) => `<th scope="col">${name.toUpperCase()}</th>`).join('')}${outputs.map((port) => `<th scope="col">${escapeHtml(outputLabel(port))}</th>`).join('')}</tr>`;
   const body = rows.map((row) => `<tr>${inputNames.map((name) => `<td>${row.inputs[name] ? 1 : 0}</td>`).join('')}${outputs.map((port) => {
     const output = row.outputs?.find((candidate) => candidate.id === port.id);
     if (!output) return '<td class="pending">·</td>';
     return `<td class="${output.high ? 'high' : 'low'}">${output.high ? 1 : 0}</td>`;
   }).join('')}</tr>`).join('');
-  const caption = state.truthRows?.id === experiment.id
-    ? (state.circuitRunning ? '<caption>Running every combination…</caption>' : '<caption>Measured from real probe cells.</caption>')
-    : '<caption>Run all to measure every combination.</caption>';
-  elements.truthTable.innerHTML = `<thead>${header}</thead><tbody>${body}</tbody>${caption}`;
+  const caption = measured
+    ? (state.circuitRunning ? 'Running every combination…' : 'Measured from real probe cells.')
+    : inputNames.length > 4
+      ? `Run all measures every combination: ${truthTableEstimate().text}.`
+      : 'Run all to measure every combination.';
+  elements.truthTable.innerHTML = `<thead>${header}</thead><tbody>${body}</tbody><caption>${escapeHtml(caption)}</caption>`;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2082,6 +2383,22 @@ function getCellSize() {
   return BASE_CELL_SIZE * state.zoom;
 }
 
+// The zoom floor: the usual 10%, lowered for boards too big to fit the view
+// at 10% so Fit always succeeds (a 3000-wide board on a phone needs ~1%).
+function getMinZoom() {
+  const viewport = getWorldViewport();
+  return getFitZoom({
+    viewportWidth: viewport.width,
+    viewportHeight: viewport.height,
+    regionWidth: state.board.width,
+    regionHeight: state.board.height,
+    baseCellSize: BASE_CELL_SIZE,
+    padding: 24,
+    minZoom: 0.004,
+    maxZoom: MIN_ZOOM,
+  });
+}
+
 function screenToCell(localX, localY) {
   const cellSize = getCellSize();
   return {
@@ -2095,8 +2412,8 @@ function setZoom(nextZoom, anchorX = canvas.clientWidth / 2, anchorY = canvas.cl
   const worldX = (anchorX - state.panX) / previousCellSize;
   const worldY = (anchorY - state.panY) / previousCellSize;
 
-  // A circuit fit may sit below the manual floor; never jump up from it.
-  state.zoom = Math.min(MAX_ZOOM, Math.max(Math.min(MIN_ZOOM, state.zoom), nextZoom));
+  // A circuit fit may sit below the floor; never jump up from it.
+  state.zoom = Math.min(MAX_ZOOM, Math.max(Math.min(getMinZoom(), state.zoom), nextZoom));
 
   const nextCellSize = getCellSize();
   state.panX = anchorX - worldX * nextCellSize;
@@ -2121,7 +2438,7 @@ function fitRegion(region, { padding = 24, maxZoom = MAX_ZOOM, deferred = false 
     regionHeight: region.height,
     baseCellSize: BASE_CELL_SIZE,
     padding,
-    minZoom: MIN_ZOOM,
+    minZoom: getMinZoom(),
     maxZoom,
   });
   state.zoom = zoom;
@@ -2178,6 +2495,7 @@ function paintCell(cellX, cellY, alive) {
   if (state.board.cells[index] === nextValue) return;
 
   state.board.cells[index] = nextValue;
+  state.boardRevision += 1;
   state.authoredStart = ownedSnapshot();
   markDesignDirty(true);
   updateStats();
@@ -2430,6 +2748,10 @@ function drawGrid(cellSize, worldWidth, worldHeight, visible) {
 }
 
 function drawCells(cellSize, visible) {
+  if (cellSize < BITMAP_CELL_SIZE) {
+    drawCellsBitmap(cellSize, visible);
+    return;
+  }
   const { startX, endX, startY, endY } = visible;
   const inset = cellSize >= 6 ? 1 : 0;
   const size = Math.max(1, cellSize - inset);
@@ -2445,6 +2767,65 @@ function drawCells(cellSize, visible) {
       ctx.fillRect(x * cellSize + inset, py, size, size);
     }
   }
+}
+
+// Sub-pixel cells: paint the visible cells into a device-pixel bitmap where a
+// pixel lights when any cell under it is alive, then draw it once. The bitmap
+// is kept while the board, the zoom and the visible range stay the same, so
+// panning a fitted 3000-wide board only re-draws an image.
+function drawCellsBitmap(cellSize, visible) {
+  const { startX, endX, startY, endY } = visible;
+  if (endX <= startX || endY <= startY) return;
+  const ratio = window.devicePixelRatio || 1;
+  const scale = cellSize * ratio;
+  const left = Math.floor(startX * scale);
+  const top = Math.floor(startY * scale);
+  const width = Math.max(1, Math.ceil(endX * scale) - left);
+  const height = Math.max(1, Math.ceil(endY * scale) - top);
+  const key = [state.board.generation, state.boardRevision, startX, endX, startY, endY, scale, palette.cell].join(':');
+  if (bitmap.board !== state.board || bitmap.key !== key) {
+    if (!bitmap.canvas) {
+      bitmap.canvas = document.createElement('canvas');
+      bitmap.context = bitmap.canvas.getContext('2d');
+    }
+    if (bitmap.canvas.width !== width || bitmap.canvas.height !== height) {
+      bitmap.canvas.width = width;
+      bitmap.canvas.height = height;
+      bitmap.image = bitmap.context.createImageData(width, height);
+      bitmap.pixels = new Uint32Array(bitmap.image.data.buffer);
+    }
+    const pixels = bitmap.pixels;
+    pixels.fill(0);
+    const colour = cellPixel(palette.cell);
+    const cells = state.board.cells;
+    const boardWidth = state.board.width;
+    const columns = new Int32Array(endX - startX);
+    for (let x = startX; x < endX; x += 1) columns[x - startX] = Math.floor(x * scale) - left;
+    for (let y = startY; y < endY; y += 1) {
+      const row = y * boardWidth;
+      const target = (Math.floor(y * scale) - top) * width;
+      for (let x = startX; x < endX; x += 1) {
+        if (cells[row + x] === 1) pixels[target + columns[x - startX]] = colour;
+      }
+    }
+    bitmap.context.putImageData(bitmap.image, 0, 0);
+    bitmap.board = state.board;
+    bitmap.key = key;
+  }
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(bitmap.canvas, 0, 0, width, height, left / ratio, top / ratio, width / ratio, height / ratio);
+  ctx.restore();
+}
+
+// A hex colour as an opaque little-endian RGBA pixel for a Uint32 image view.
+function cellPixel(hex) {
+  const normalized = String(hex || '#000000').replace('#', '');
+  const value = /^[0-9a-f]{6}$/i.test(normalized) ? normalized : '000000';
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return ((255 << 24) | (blue << 16) | (green << 8) | red) >>> 0;
 }
 
 function drawSelection(cellSize) {
@@ -2491,7 +2872,8 @@ function drawCircuitMarkers(cellSize) {
   ctx.font = markerFont();
   ctx.textBaseline = 'middle';
 
-  // Gate tile outlines.
+  // Gate tile outlines, named above each tile (inside it when the tile sits
+  // at the board's top edge); a turned tile carries a ↻ mark.
   ctx.setLineDash([6, 4]);
   for (const tile of tiles) {
     ctx.strokeRect(Math.round(tile.x * cellSize) + 0.5, Math.round(tile.y * cellSize) + 0.5, Math.round(tile.width * cellSize), Math.round(tile.height * cellSize));
@@ -2499,35 +2881,44 @@ function drawCircuitMarkers(cellSize) {
   ctx.setLineDash([]);
   ctx.textAlign = 'left';
   for (const tile of tiles) {
-    ctx.fillText(GATE_CARDS[tile.gateId]?.name || tile.gateId, tile.x * cellSize + 6, tile.y * cellSize - 10);
+    const name = GATE_CARDS[tile.gateId]?.name || String(tile.gateId).toUpperCase();
+    const turned = Number(tile.rotation) ? ' ↻' : '';
+    const top = tile.y * cellSize;
+    ctx.fillText(name + turned, tile.x * cellSize + 6, top >= 16 ? top - 10 : top + 12);
   }
 
-  // Input lanes with direction arrows.
+  // Input lanes with direction arrows, one per port (a reused input has several).
+  const boardWidth = state.board.width * cellSize;
+  const boardHeight = state.board.height * cellSize;
   for (const port of ports) {
     const active = experiment.inputs?.[port.name];
     const label = port.name.toUpperCase();
+    const arrow = PORT_ARROWS[port.side] || '→';
     ctx.globalAlpha = active ? 1 : 0.45;
+    const px = Math.round(port.x * cellSize) + 0.5;
+    const py = Math.round(port.y * cellSize) + 0.5;
+    ctx.beginPath();
+    if (port.side === 'west') { ctx.moveTo(0, py); ctx.lineTo(port.x * cellSize - 4, py); }
+    else if (port.side === 'east') { ctx.moveTo(boardWidth, py); ctx.lineTo(port.x * cellSize + 4, py); }
+    else if (port.side === 'north') { ctx.moveTo(px, 0); ctx.lineTo(px, port.y * cellSize - 4); }
+    else { ctx.moveTo(px, boardHeight); ctx.lineTo(px, port.y * cellSize + 4); }
+    ctx.stroke();
     if (port.side === 'west') {
-      const py = Math.round(port.y * cellSize) + 0.5;
-      const endX = port.x * cellSize;
-      ctx.beginPath();
-      ctx.moveTo(0, py);
-      ctx.lineTo(endX - 4, py);
-      ctx.stroke();
-      drawArrowHead(endX, py, 0);
+      drawArrowHead(port.x * cellSize, py, 0);
       ctx.textAlign = 'right';
-      ctx.fillText(`${label} →`, endX - 10, py - 10);
-    } else {
-      const px = Math.round(port.x * cellSize) + 0.5;
-      const startY = state.board.height * cellSize;
-      const endY = port.y * cellSize;
-      ctx.beginPath();
-      ctx.moveTo(px, startY);
-      ctx.lineTo(px, endY + 4);
-      ctx.stroke();
-      drawArrowHead(px, endY, -Math.PI / 2);
+      ctx.fillText(`${label} ${arrow}`, port.x * cellSize - 10, py - 10);
+    } else if (port.side === 'east') {
+      drawArrowHead(port.x * cellSize, py, Math.PI);
       ctx.textAlign = 'left';
-      ctx.fillText(`${label} ↑`, px + 8, endY + 14);
+      ctx.fillText(`${arrow} ${label}`, port.x * cellSize + 10, py - 10);
+    } else if (port.side === 'north') {
+      drawArrowHead(px, port.y * cellSize, Math.PI / 2);
+      ctx.textAlign = 'left';
+      ctx.fillText(`${label} ${arrow}`, px + 8, port.y * cellSize - 14);
+    } else {
+      drawArrowHead(px, port.y * cellSize, -Math.PI / 2);
+      ctx.textAlign = 'left';
+      ctx.fillText(`${label} ${arrow}`, px + 8, port.y * cellSize + 14);
     }
   }
   ctx.globalAlpha = 1;
@@ -2536,6 +2927,7 @@ function drawCircuitMarkers(cellSize) {
   for (const port of experiment.outputs) {
     const output = state.circuitOutputs?.find((candidate) => candidate.id === port.id);
     const lampState = getLampState(output);
+    const label = outputLabel(port);
     const x = (port.x - Math.floor(port.width / 2)) * cellSize;
     const y = (port.y - Math.floor(port.height / 2)) * cellSize;
     const w = port.width * cellSize;
@@ -2551,11 +2943,11 @@ function drawCircuitMarkers(cellSize) {
     const suffix = lampState === 'high' ? ' · HIGH' : lampState === 'low' ? ' · LOW' : '';
     const labelX = x + w + 6;
     ctx.textAlign = 'left';
-    if (suffix && state.panX + labelX + ctx.measureText(port.label + suffix).width > canvas.clientWidth - 4) {
-      ctx.fillText(port.label, labelX, y + h / 2 - 7);
+    if (suffix && state.panX + labelX + ctx.measureText(label + suffix).width > canvas.clientWidth - 4) {
+      ctx.fillText(label, labelX, y + h / 2 - 7);
       ctx.fillText(suffix.slice(3), labelX, y + h / 2 + 7);
     } else {
-      ctx.fillText(port.label + suffix, labelX, y + h / 2);
+      ctx.fillText(label + suffix, labelX, y + h / 2);
     }
   }
   ctx.restore();
@@ -2636,9 +3028,9 @@ function renderToolStrip() {
  * Mode and routing
  * ------------------------------------------------------------------------- */
 
-const WORKSPACE_KEYS = ['board', 'authoredStart', 'history', 'designSettings', 'selection', 'circuit', 'circuitOutputs',
-  'truthRows', 'session', 'previewConfig', 'designDirty', 'saveStatus', 'publishStatus', 'zoom', 'panX', 'panY',
-  'pendingFit', 'viewWidth', 'viewHeight'];
+const WORKSPACE_KEYS = ['board', 'authoredStart', 'history', 'designSettings', 'selection', 'circuit', 'circuitSpec',
+  'circuitOutputs', 'truthRows', 'session', 'previewConfig', 'designDirty', 'saveStatus', 'publishStatus', 'zoom', 'panX',
+  'panY', 'pendingFit', 'viewWidth', 'viewHeight'];
 
 // Playground and Studio each keep their own board, history and camera; a
 // Studio project never overwrites the Playground sketch.
@@ -2657,6 +3049,7 @@ function swapWorkspace(owner) {
     designSettings: DEFAULT_DESIGN_SETTINGS,
     selection: null,
     circuit: null,
+    circuitSpec: null,
     circuitOutputs: null,
     truthRows: null,
     session: null,
@@ -3358,17 +3751,24 @@ function syncCommunity() {
 
 function getCurrentCreationPreviewConfig() {
   const coordinates = getLiveCoordinates();
-  if (!coordinates.length) return {};
-  const config = createCreationPreviewConfig({
-    title: elements.projectTitle.value || 'Untitled project',
-    previewConfig: state.previewConfig,
-    currentVersion: {
-      rle: encodeRle(coordinates),
-      settings: getCurrentDesignSettings(),
-    },
-  });
+  let config = {};
+  if (coordinates.length) {
+    try {
+      config = createCreationPreviewConfig({
+        title: elements.projectTitle.value || 'Untitled project',
+        previewConfig: state.previewConfig,
+        currentVersion: {
+          rle: encodeRle(coordinates),
+          settings: getCurrentDesignSettings(),
+        },
+      });
+    } catch {
+      // Cells spread wider than a preview can encode; the save still goes through.
+      config = {};
+    }
+  }
   // The circuit spec travels with the project; every repository keeps previewConfig as-is.
-  return state.circuit ? { ...config, circuit: getCircuitSpec() } : config;
+  return state.circuitSpec ? { ...config, circuit: getCircuitSpec() } : config;
 }
 
 function importSharedBuildFromHash() {
@@ -3420,15 +3820,26 @@ function getVisiblePresets() {
     return presets.filter((preset) => [preset.name, preset.id, PATTERN_NOTES[preset.id], preset.note]
       .some((value) => String(value || '').toLowerCase().includes(query)));
   }
+  if (state.activePresetGroup === MASTERWORKS_GROUP.id) return [];
   const group = getPresetGroup(presetGroups, state.activePresetGroup) ?? presetGroups[0];
   return group.ids.map((id) => presets.find((preset) => preset.id === id)).filter(Boolean);
+}
+
+// Masterworks match on name and discoverer (and the note) when searching.
+function getVisibleMasterworks() {
+  const query = state.patternQuery.trim().toLowerCase();
+  if (query) {
+    return masterworks.filter((work) => [work.name, work.discoverer, work.note]
+      .some((value) => String(value || '').toLowerCase().includes(query)));
+  }
+  return state.activePresetGroup === MASTERWORKS_GROUP.id ? [...masterworks] : [];
 }
 
 function renderPatternList() {
   const searching = Boolean(state.patternQuery.trim());
   elements.patternTabs.hidden = searching;
   elements.patternTabs.innerHTML = '';
-  for (const group of presetGroups) {
+  for (const group of [...presetGroups, MASTERWORKS_GROUP]) {
     const tab = document.createElement('button');
     tab.type = 'button';
     tab.dataset.patternTab = group.id;
@@ -3440,6 +3851,7 @@ function renderPatternList() {
 
   elements.patternList.innerHTML = '';
   const visible = getVisiblePresets();
+  const works = getVisibleMasterworks();
   if (!searching && state.activePresetGroup === presetGroups[0].id) {
     elements.patternList.append(createPatternCard({
       id: 'random-soup',
@@ -3449,13 +3861,116 @@ function renderPatternList() {
     }));
   }
   for (const preset of visible) elements.patternList.append(createPatternCard(preset));
-  if (visible.length === 0) {
+  for (const work of works) elements.patternList.append(createMasterworkCard(work));
+  if (visible.length === 0 && works.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'card-empty';
     empty.textContent = 'No patterns match.';
     elements.patternList.append(empty);
   }
   updatePresetSelection();
+}
+
+// A masterwork card: the same card as a pattern, with the discoverer and year
+// as its meta line and the size in place of a thumbnail that would be
+// illegible. Reference-only works link to their source instead of loading.
+function createMasterworkCard(work) {
+  const loadable = Boolean(work.loadable);
+  const card = document.createElement(loadable ? 'button' : 'div');
+  card.className = `card card-masterwork${loadable ? '' : ' card-reference'}`;
+  card.dataset.masterworkId = work.id;
+  card.setAttribute('role', 'listitem');
+  if (loadable) {
+    card.type = 'button';
+    card.setAttribute('aria-label', `Load ${work.name}`);
+  }
+  const thumb = document.createElement('span');
+  thumb.className = 'card-thumb';
+  const thumbnail = loadable && work.size.width <= THUMBNAIL_MAX_WIDTH && work.size.height <= THUMBNAIL_MAX_WIDTH
+    ? masterworkThumbnail(work)
+    : null;
+  if (thumbnail) thumb.append(thumbnail);
+  else thumb.innerHTML = `<svg class="icon" aria-hidden="true" style="width:22px;height:22px"><use href="#${loadable ? 'i-grid' : 'i-external'}" /></svg>`;
+  const size = work.size ? `${work.size.width.toLocaleString()} × ${work.size.height.toLocaleString()}` : '';
+  const meta = [work.discoverer, work.year].filter(Boolean).join(' · ');
+  const loading = state.masterworkLoading === work.id;
+  if (loading) {
+    card.disabled = true;
+    card.setAttribute('aria-busy', 'true');
+  }
+  const text = document.createElement('span');
+  text.className = 'card-text';
+  text.innerHTML = `<span class="card-name">${escapeHtml(work.name)}</span>`
+    + `<span class="card-meta">${escapeHtml(meta)}</span>`
+    + `<span class="card-note">${escapeHtml(work.note)}</span>`
+    + (loadable
+      ? `<span class="card-size mono">${loading ? 'Loading…' : size}</span>`
+      : `<span class="card-reason">${escapeHtml(work.reason || (size && `${size} cells.`) || '')}</span>`
+        + `<a class="card-link" href="${escapeHtml(work.source?.url || '#')}" target="_blank" rel="noopener">Read about it<svg class="icon" aria-hidden="true"><use href="#i-external" /></svg></a>`);
+  card.append(thumb, text);
+  return card;
+}
+
+function masterworkThumbnail(work) {
+  let coordinates = masterworkThumbnailCache.get(work.id);
+  if (!coordinates) {
+    try {
+      coordinates = decodeMasterwork(work.id).coordinates;
+    } catch {
+      return null;
+    }
+    masterworkThumbnailCache.set(work.id, coordinates);
+  }
+  const thumbCanvas = document.createElement('canvas');
+  drawPatternThumbnail(thumbCanvas, coordinates);
+  return thumbCanvas;
+}
+
+// Put a masterwork on the board, centred, with bounded edges so spaceships
+// and puffers do not wrap into their own trail: the board grows to its
+// recommended size first when it is smaller. One undoable command; the view
+// fits the cells. The largest works fetch their cells on demand; the card
+// shows "Loading…" meanwhile.
+async function loadMasterwork(id) {
+  const work = getMasterwork(id);
+  if (!work?.loadable || state.masterworkLoading) return;
+  state.masterworkLoading = id;
+  renderPatternList();
+  let coordinates;
+  try {
+    ({ coordinates } = await loadMasterworkCells(id));
+  } catch (error) {
+    showToast(`Could not load ${work.name}: ${getErrorMessage(error)}`, { kind: 'error' });
+    return;
+  } finally {
+    state.masterworkLoading = null;
+    renderPatternList();
+  }
+  if (state.playing) setPlaying(false);
+  const width = Math.max(state.board.width, work.board?.width || 0);
+  const height = Math.max(state.board.height, work.board?.height || 0);
+  const grew = width !== state.board.width || height !== state.board.height;
+  const bounds = getPatternBounds(coordinates);
+  if (bounds.width > width || bounds.height > height) {
+    showToast(`${work.name} needs a board of at least ${bounds.width} × ${bounds.height}.`, { kind: 'error' });
+    return;
+  }
+  beginAuthoringCommand();
+  exitCircuit();
+  state.designSettings = mergeDesignSettings(state.designSettings, grew
+    ? { gridPreset: 'custom', width, height, wrapping: false }
+    : { wrapping: false });
+  const board = createBoard(width, height);
+  const originX = Math.floor((width - bounds.width) / 2) - bounds.minX;
+  const originY = Math.floor((height - bounds.height) / 2) - bounds.minY;
+  for (const [x, y] of coordinates) board.cells[(originY + y) * width + originX + x] = 1;
+  state.board = board;
+  if (state.tool === 'stamp') exitStamp();
+  finishAuthoringCommand();
+  fitLiveCells();
+  syncDesignControls();
+  renderInspector();
+  if (grew) showToast(`Board grew to ${width} × ${height} to fit ${work.name}. Undo to go back.`, { kind: 'info' });
 }
 
 function createPatternCard(preset) {
@@ -3531,8 +4046,21 @@ function drawGateThumbnail(thumbCanvas, id) {
   preview.setTransform(ratio, 0, 0, ratio, 0, 0);
   let crop = gateThumbnailCache.get(id);
   if (!crop) {
-    const { board } = buildCircuitExperiment(id, {});
-    const { origin, tile } = getCircuitMarkers(id);
+    const preset = circuitPresets.find((entry) => entry.id === id);
+    let board;
+    let origin;
+    let tile;
+    if (preset) {
+      // A preset shows its first gate tile.
+      const built = buildSpec(preset.spec);
+      const first = built.tiles?.[0];
+      board = built.board;
+      origin = first ? { x: first.x, y: first.y } : { x: 0, y: 0 };
+      tile = first ? Math.min(first.width, first.height) : Math.min(board.width, board.height, 150);
+    } else {
+      ({ board } = buildCircuitExperiment(id, {}));
+      ({ origin, tile } = getCircuitMarkers(id));
+    }
     const stride = tile + 1;
     const sums = new Uint32Array(stride * stride);
     for (let y = 1; y <= tile; y += 1) {
@@ -3560,21 +4088,39 @@ function drawGateThumbnail(thumbCanvas, id) {
   }
 }
 
+// Logic rail cards: the single gates and the half-adder, then the ready-made
+// circuits (XOR, Full adder) that open as editable formulas.
+function getLogicCards() {
+  return [
+    ...circuitExperiments.map((experiment) => ({
+      id: experiment.id,
+      name: GATE_CARDS[experiment.id]?.name || experiment.title,
+      note: GATE_CARDS[experiment.id]?.note || experiment.description,
+      spec: experiment.id === 'half-adder' ? { gates: ['half-adder'], inputs: {} } : { gates: [experiment.id], inputs: {} },
+    })),
+    ...circuitPresets.map((preset) => ({ id: preset.id, name: preset.title, note: preset.description, spec: preset.spec })),
+  ];
+}
+
 function renderLogicList() {
   elements.logicList.innerHTML = '';
-  for (const experiment of circuitExperiments) {
-    const card = GATE_CARDS[experiment.id] || { name: experiment.title, note: experiment.description };
+  const current = circuitCardId();
+  for (const card of getLogicCards()) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'card';
-    button.dataset.gateId = experiment.id;
+    button.dataset.gateId = card.id;
     button.setAttribute('role', 'listitem');
-    button.setAttribute('aria-pressed', String(circuitGates().join('>') === experiment.id));
+    button.setAttribute('aria-pressed', String(current === card.id));
     const thumb = document.createElement('span');
     thumb.className = 'card-thumb';
     const thumbCanvas = document.createElement('canvas');
-    drawGateThumbnail(thumbCanvas, experiment.id);
-    thumb.append(thumbCanvas);
+    try {
+      drawGateThumbnail(thumbCanvas, card.id);
+      thumb.append(thumbCanvas);
+    } catch {
+      thumb.innerHTML = '<svg class="icon" aria-hidden="true" style="width:22px;height:22px"><use href="#i-logic" /></svg>';
+    }
     const text = document.createElement('span');
     text.className = 'card-text';
     text.innerHTML = `<span class="card-name">${escapeHtml(card.name)}</span><span class="card-note">${escapeHtml(card.note)}</span>`;
@@ -3587,8 +4133,9 @@ function updatePresetSelection() {
   for (const button of elements.patternList.querySelectorAll('[data-pattern-id]')) {
     button.setAttribute('aria-pressed', String(state.tool === 'stamp' && button.dataset.patternId === state.selectedPreset?.id));
   }
+  const current = circuitCardId();
   for (const button of elements.logicList.querySelectorAll('[data-gate-id]')) {
-    button.setAttribute('aria-pressed', String(button.dataset.gateId === circuitGates().join('>')));
+    button.setAttribute('aria-pressed', String(button.dataset.gateId === current));
   }
 }
 
@@ -3624,7 +4171,6 @@ const menus = [
   ['#more-menu-toggle', '#more-menu'],
   ['#speed-toggle', '#speed-menu'],
   ['#how-life-works', '#rules-popover'],
-  ['#add-gate', '#add-gate-menu'],
 ].map(([toggle, menu]) => ({ toggle: $(toggle), menu: $(menu) }));
 
 function isMenuOpen(menu) {
@@ -3639,6 +4185,11 @@ function setMenuOpen(entry, open) {
 
 function closeMenus() {
   for (const entry of menus) setMenuOpen(entry, false);
+  closeChipMenu();
+}
+
+function anyMenuOpen() {
+  return menus.some((entry) => isMenuOpen(entry.menu)) || Boolean(state.chipMenu);
 }
 
 function toggleMenu(entry) {
@@ -3772,7 +4323,7 @@ function bindEvents() {
       state.panX += mid.x - state.pointer.pinch.lastMid.x;
       state.panY += mid.y - state.pointer.pinch.lastMid.y;
       state.pointer.pinch.lastMid = mid;
-      setZoom(getPinchZoom({ startDistance: state.pointer.pinch.startDistance, distance, startZoom: state.pointer.pinch.startZoom, minZoom: MIN_ZOOM, maxZoom: MAX_ZOOM }), mid.x, mid.y);
+      setZoom(getPinchZoom({ startDistance: state.pointer.pinch.startDistance, distance, startZoom: state.pointer.pinch.startZoom, minZoom: getMinZoom(), maxZoom: MAX_ZOOM }), mid.x, mid.y);
       return;
     }
 
@@ -3956,6 +4507,12 @@ function bindEvents() {
     renderPatternList();
   });
   elements.patternList.addEventListener('click', (event) => {
+    if (event.target.closest('a')) return;
+    const work = event.target.closest('button[data-masterwork-id]');
+    if (work) {
+      loadMasterwork(work.dataset.masterworkId).then(closeSheets);
+      return;
+    }
     const card = event.target.closest('[data-pattern-id]');
     if (!card) return;
     if (card.dataset.patternId === 'random-soup') {
@@ -3973,9 +4530,13 @@ function bindEvents() {
     if (tab) setRailTab(tab.dataset.railTab);
   });
   elements.logicList.addEventListener('click', (event) => {
-    const card = event.target.closest('[data-gate-id]');
+    const button = event.target.closest('[data-gate-id]');
+    if (!button) return;
+    const card = getLogicCards().find((entry) => entry.id === button.dataset.gateId);
     if (!card) return;
-    openCircuit([card.dataset.gateId]);
+    // Reopening the card that is already open keeps its switches.
+    const spec = circuitCardId() === card.id ? state.circuitSpec : card.spec;
+    openCircuit(spec);
     closeSheets();
   });
 
@@ -4008,14 +4569,21 @@ function bindEvents() {
     const input = event.target.closest('[data-input]');
     if (input) setCircuitInput(input.dataset.input, input.checked);
   });
-  elements.addGateMenu.addEventListener('click', (event) => {
-    const item = event.target.closest('[data-add-gate]');
-    if (item) changeChain([...circuitGates(), item.dataset.addGate]);
+  elements.formulaList.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-chip]');
+    if (!chip || chip.disabled) return;
+    event.stopPropagation();
+    if (state.chipMenu?.chip === chip) closeChipMenu();
+    else openChipMenu(chip);
   });
-  elements.chainList.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-remove-gate]');
-    if (button) changeChain(circuitGates().filter((_, index) => index !== Number(button.dataset.removeGate)));
+  elements.chipMenu.addEventListener('click', (event) => {
+    const item = event.target.closest('[data-chip-action]');
+    if (!item || item.disabled) return;
+    event.stopPropagation();
+    applyChipAction(item.dataset.chipAction, item.dataset.value);
   });
+  elements.inspector.addEventListener('scroll', positionChipMenu);
+  window.addEventListener('resize', positionChipMenu);
   elements.runCircuit.addEventListener('click', runCircuitExperiment);
   elements.fillTruthTable.addEventListener('click', fillTruthTable);
   elements.versionHistory.addEventListener('click', (event) => {
@@ -4049,7 +4617,7 @@ function bindEvents() {
     const meta = event.metaKey || event.ctrlKey;
 
     if (event.key === 'Escape') {
-      if (menus.some((entry) => isMenuOpen(entry.menu))) { closeMenus(); return; }
+      if (anyMenuOpen()) { closeMenus(); return; }
       if (elements.rail.dataset.open === 'true' || elements.inspector.dataset.open === 'true') { closeSheets(); return; }
       if (state.tool === 'stamp') { exitStamp(); return; }
       if (state.selection) selectionCommand('deselect');
@@ -4146,10 +4714,11 @@ async function boot() {
   requestAnimationFrame(loop);
 }
 
-// Read-only hook for browser tests: live cell coordinates and a few state facts.
+// Hook for browser tests: live cell coordinates, a few state facts, and two
+// probes (renderTime, resizeBoard) for the large-board checks.
 window.__lifeLab = {
   liveCells: () => getLiveCoordinates(),
-  circuitGeometry: () => (state.circuit ? { tiles: getCircuitGeometry(state.circuit).tiles, outputs: state.circuit.outputs } : null),
+  circuitGeometry: () => (state.circuit ? { tiles: getCircuitGeometry(state.circuit).tiles, ports: getCircuitGeometry(state.circuit).ports, outputs: state.circuit.outputs } : null),
   snapshot: () => ({
     generation: state.board.generation,
     population: getPopulation(state.board),
@@ -4158,13 +4727,37 @@ window.__lifeLab = {
     tool: state.tool,
     mode: state.mode,
     zoom: state.zoom,
+    minZoom: getMinZoom(),
+    wrapping: state.designSettings.wrapping,
     panX: state.panX,
     panY: state.panY,
     playing: state.playing,
     circuit: state.circuit?.id || null,
     gates: circuitGates(),
+    spec: state.circuitSpec ? describeSpec(contractSpec(state.circuitSpec)) : null,
+    inputs: state.circuitSpec ? { ...state.circuitSpec.inputs } : null,
     selection: state.selection,
   }),
+  // Average milliseconds for a forced full render of the current view.
+  renderTime: (frames = 5) => {
+    const started = performance.now();
+    for (let frame = 0; frame < frames; frame += 1) {
+      if (frame) bitmap.key = '';
+      render();
+    }
+    return (performance.now() - started) / frames;
+  },
+  // Milliseconds for a render that may reuse the cached bitmap (a pan frame).
+  panFrameTime: () => {
+    state.panX += 1;
+    const started = performance.now();
+    render();
+    return performance.now() - started;
+  },
+  resizeBoard: (width, height) => {
+    applyBoardSize({ ...mergeDesignSettings(state.designSettings, { gridPreset: 'custom', width, height }), width, height });
+    return { width: state.board.width, height: state.board.height };
+  },
 };
 
 boot();

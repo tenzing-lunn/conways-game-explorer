@@ -50,7 +50,7 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
   min-height: 0;
   flex: 1;
   padding: 0 16px 16px;
-  overflow: auto;
+  overflow: hidden auto;
 }
 
 .rail-note {
@@ -58,8 +58,10 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
   color: var(--muted);
 }
 
+/* Five groups do not fit the rail on one line; the last wraps under them. */
 .pattern-tabs {
   display: flex;
+  flex-wrap: wrap;
   flex: 0 0 auto;
   gap: 2px;
   border-bottom: 1px solid var(--line);
@@ -154,6 +156,63 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+/* Masterworks: the same card with a meta line, a size line and, for works
+   that only link out, a reason and a "Read about it" link. */
+.card-meta {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.card-masterwork .card-note {
+  color: var(--text);
+}
+
+.card-size {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.card-reason {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.card-reference {
+  cursor: default;
+}
+
+.card-reference:hover {
+  background: transparent;
+}
+
+.card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.card-link:hover {
+  text-decoration: underline;
+}
+
+.card-link .icon {
+  width: 12px;
+  height: 12px;
+  flex-basis: 12px;
 }
 
 .card-empty {
@@ -436,6 +495,7 @@ body[data-playing="true"] .icon-pause {
   }
 
   .pattern-tabs {
+    flex-wrap: nowrap;
     overflow-x: auto;
     border-bottom: 0;
     gap: 6px;
@@ -480,6 +540,11 @@ body[data-playing="true"] .icon-pause {
   .card-thumb canvas {
     width: 70px;
     height: 70px;
+  }
+
+  .card-link {
+    min-height: 40px;
+    margin-top: 0;
   }
 
   .canvas-frame {

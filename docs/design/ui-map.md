@@ -1,7 +1,7 @@
 # Life Lab UI map
 
 Stable ids and data attributes, by screen. Tests and later agents can rely on these.
-`window.__lifeLab.snapshot()` returns `{ generation, population, width, height, tool, mode, zoom, panX, panY, playing, circuit, gates, selection }`; `window.__lifeLab.liveCells()` returns live `[x, y]` pairs; `window.__lifeLab.circuitGeometry()` returns `{ tiles, outputs }` in cells for the open circuit (or `null`).
+`window.__lifeLab.snapshot()` returns `{ generation, population, width, height, tool, mode, zoom, minZoom, panX, panY, playing, circuit, gates, spec, inputs, selection }` (`spec` is the open circuit as formula strings, e.g. `["OUT = (A AND B) OR C"]`; `gates` is the gate list when it is a plain chain); `window.__lifeLab.liveCells()` returns live `[x, y]` pairs; `window.__lifeLab.circuitGeometry()` returns `{ tiles, ports, outputs }` in cells for the open circuit (or `null`). Test probes: `window.__lifeLab.renderTime(frames)` (average ms of a forced full render), `window.__lifeLab.panFrameTime()` (ms of a render after a 1px pan), `window.__lifeLab.resizeBoard(width, height)` (resizes the board like the Grid size control and returns the new size).
 
 ## Top bar (every screen)
 
@@ -20,9 +20,10 @@ Stable ids and data attributes, by screen. Tests and later agents can rely on th
 - `#rail-title` — "Patterns" or "Components".
 - `#rail-close` — phone sheet close.
 - `#rail-kind-tabs` with `[data-rail-tab="patterns|logic"]` — Studio only.
-- `#pattern-panel`, `#pattern-search`, `#pattern-tabs` (group chips), `#pattern-list`.
+- `#pattern-panel`, `#pattern-search`, `#pattern-tabs` with `[data-pattern-tab="start|motion|basics|showcase|masterworks"]` (the Masterworks group is the last tab; search spans every group), `#pattern-list`.
 - `[data-pattern-id="<preset id>"]` — pattern cards (`random-soup`, `glider`, `gosper-gun`, …); click enters Stamp; `aria-pressed` while stamping it.
-- `#logic-panel`, `#logic-list` with `[data-gate-id="and|or|not|half-adder"]` — gate cards; `aria-pressed` when that single gate is loaded.
+- `[data-masterwork-id="<id>"]` — Masterworks cards (`.card-masterwork`): a `<button>` for loadable works (click replaces the board with the pattern centred on bounded edges, growing the board to the work's recommended size first; one undoable step; toast "Board grew to W × H to fit <name>. Undo to go back." when it grew; while cells are still arriving the card is disabled with `aria-busy="true"` and its size line reads "Loading…") or a `<div class="card-reference">` with `a.card-link` ("Read about it", opens the source in a new tab) and `.card-reason` for reference-only works. Text: `.card-name`, `.card-meta` (discoverer · year), `.card-note`, `.card-size`.
+- `#logic-panel`, `#logic-list` with `[data-gate-id="and|or|not|half-adder|xor|full-adder"]` — gate and ready-made circuit cards; `aria-pressed` on the card that matches the open circuit (a single gate, the half-adder, or an unedited XOR/Full adder).
 - `#sheet-backdrop` — dims the screen behind an open phone sheet; tap closes.
 
 ## Canvas frame (Playground and Studio)
@@ -37,6 +38,7 @@ Stable ids and data attributes, by screen. Tests and later agents can rely on th
 - `#status-mobile` — phone "Gen N · M cells" line.
 - `#rules-popover` — "How Life works".
 - `#transport`: `#play-toggle` (`#play-label`), `#step`, `#reset`, `#speed-toggle` (`#speed-label`) → `#speed-menu` with `[data-speed="1|2|5|10|20|40"]` (`aria-checked`), `#zoom-out`, `#zoom-label`, `#zoom-in`, `#fit`, `#patterns-open` (phone sheet).
+- Zoom floor: 10% for boards that fit at 10%; larger boards lower it so Fit always shows the whole board (`snapshot().minZoom`). Cells under 1.5 px on screen are drawn through a downsampled bitmap (a pixel lights when any cell under it is alive).
 - `#status-line`: `#status-text`, `#generation`, `#population`, `#population-unit` ("cell"/"cells"), `#how-life-works`.
 
 ## Studio
@@ -53,15 +55,19 @@ Stable ids and data attributes, by screen. Tests and later agents can rely on th
 ### Inspector
 - `#inspector` — right panel; on phone a bottom sheet with `data-open`; `#inspector-close`.
 - `#experiment-heading` (desktop), `#grid-size` (`small|medium|large|custom`), `#edges` (`wrapped|bounded`).
-- `#circuit-section` (shown with a gate loaded): `#circuit-heading`, `#circuit-name`.
-- `#chain-row` (AND/OR/NOT chains; hidden for the half-adder):
-  - `#chain-list` with `.chain-chip[data-chain-gate="and|or|not"]` in order and `[data-remove-gate="<index>"]` (only when more than one gate).
-  - `#add-gate` (`aria-expanded`, disabled at three gates) → `#add-gate-menu` with `[data-add-gate="and|or|not"]`.
-  - `#chain-note` — "Up to 3 gates." or "Standalone component.".
-- `#inputs-list` with `[data-input="a|b|c|d"]` switches (`role="switch"`); each row's `<small>` names the entry gate ("→ AND", "↑ OR").
-- `#outputs-list` with `.lamp[data-output="out|sum|carry"][data-state="unset|settling|low|high"]`.
+- `#circuit-section` (shown with a gate loaded): `#circuit-heading`, `#circuit-name` (the card's note, or "N gates. Choose any part of the formula to change it.").
+- `#formula-list` (hidden for the half-adder): one `.formula-row[data-output-index]` per output reading like algebra — `.formula-label` ("OUT =", "SUM =", "CARRY ="), chips and `.formula-paren` spans.
+  - `.chip[data-chip="input"][data-output][data-path="a.b"][data-input="a"]` — an input letter; its menu offers "Use A/B/…" (reuse or add a letter) and "Replace with AND/OR/NOT" (grow a gate here).
+  - `.chip[data-chip="gate"][data-output][data-path][data-gate="and|or|not"]` — a gate; its menu offers "Remove this gate".
+  - `.chip-add#add-gate-<output id>` (`#add-gate-out`, `#add-gate-sum`, `#add-gate-carry`; `data-chip="add"`) — "Add gate" wraps that output's whole expression in AND/OR/NOT.
+  - Chips carry `aria-haspopup="menu"` and `aria-expanded`; `data-path` is the slot path from the output's root (`a`/`b` steps).
+- `#chip-menu` — the one floating menu every chip opens (body-level, `position: fixed`); items `[data-chip-action="use|grow|wrap"][data-value="<letter or gate>"]` and `[data-chip-action="remove"]`; an item that cannot be built is `disabled` with the reason in `title`. Escape or a click elsewhere closes it.
+- `#chain-note` — shown when no gate can be added ("Up to N gates.", N from circuits.js) or for the half-adder ("Standalone component.").
+- `#inputs-list` with `[data-input="a".."h"]` switches (`role="switch"`), one per distinct letter; each row's `<small>` names the lanes it enters ("→ AND", "↑ OR · ↑ AND").
+- `#outputs-list` with `.lamp-row` per output: the label ("OUT", "SUM", "CARRY"; "Sum"/"Carry" for the half-adder) and `.lamp[data-output="out|sum|carry"][data-state="unset|settling|low|high"]`.
 - `#run-circuit`; `#run-progress` (`aria-valuemax` = observation generation, `aria-valuenow`), `#run-progress-bar`, `#run-progress-text` ("generation g / N", or "Row k of n" during Run all).
-- `#fill-truth-table`, `#truth-table` (`td.high|low|pending`).
+- `#fill-truth-table`, `#truth-table` (one column per input and per output; `td.high|low|pending`; the caption states the row count and a time estimate above four inputs, and Run all confirms before starting those).
+- Persistence: Studio saves `creation.previewConfig.circuit` as `{ outputs: [{ id, label, tree }], inputs }` (or `{ gates: ['half-adder'], inputs }`); the older `{ gates: [...], inputs }` chain form and `{ preset, inputs }` still open.
 - `#details-heading`, `#project-description`, `#project-tags`.
 - `#history-heading`, `#version-history` with `[data-restore-version-id]`.
 

@@ -65,6 +65,7 @@
         <symbol id="i-eraser" viewBox="0 0 16 16"><path d="M9.5 2.5l4 4-6 6H5l-2.5-2.5z"/><path d="M6 7l3.5 3.5M5 12.5h8.5"/></symbol>
         <symbol id="i-logic" viewBox="0 0 16 16"><path d="M2.5 5h3M2.5 11h3M5.5 3.5h3a4.5 4.5 0 0 1 0 9h-3z"/><path d="M13 8h.5"/></symbol>
         <symbol id="i-pattern" viewBox="0 0 16 16"><rect x="6" y="2.5" width="4" height="4"/><rect x="2.5" y="9.5" width="4" height="4"/><rect x="9.5" y="9.5" width="4" height="4"/></symbol>
+        <symbol id="i-external" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5"/><path d="M11 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h3"/></symbol>
       </defs>
     </svg>
 
@@ -352,19 +353,7 @@
           <section id="circuit-section" class="inspector-section" aria-labelledby="circuit-heading" hidden>
             <h3 id="circuit-heading">Logic</h3>
             <p id="circuit-name" class="inspector-note"></p>
-            <div id="chain-row" class="chain-row" hidden>
-              <div id="chain-list" class="chain-list" aria-label="Gate chain"></div>
-              <div class="menu-anchor">
-                <button id="add-gate" class="button button-small" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="add-gate-menu">
-                  <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg><span>Add gate</span>
-                </button>
-                <div id="add-gate-menu" class="menu" role="menu" hidden>
-                  <button type="button" role="menuitem" data-add-gate="and">AND</button>
-                  <button type="button" role="menuitem" data-add-gate="or">OR</button>
-                  <button type="button" role="menuitem" data-add-gate="not">NOT</button>
-                </div>
-              </div>
-            </div>
+            <div id="formula-list" class="formula-list" aria-label="Circuit formula" hidden></div>
             <p id="chain-note" class="inspector-note" hidden></p>
             <h4>Inputs</h4>
             <div id="inputs-list" class="switch-list"></div>
@@ -519,6 +508,7 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <div id="chip-menu" class="menu chip-menu" role="menu" aria-label="Edit this part of the circuit" hidden></div>
 
     <script id="life-runtime-config" type="application/json">{"backend":"local"}</script>
     <script type="module" src="/src/app.js"></script>

@@ -107,10 +107,52 @@ export async function runCircuit(page, { timeout = 90_000 } = {}) {
   await expect(page.locator('#run-circuit')).toBeEnabled({ timeout });
 }
 
-export const chips = (page) => page.locator('#chain-list [data-chain-gate]').evaluateAll((nodes) => nodes.map((node) => node.dataset.chainGate));
+// Gate chips in reading order of the formula lines.
+export const chips = (page) => page.locator('#formula-list [data-chip="gate"]').evaluateAll((nodes) => nodes.map((node) => node.dataset.gate));
+// The formula as plain text, one string per output: "OUT = (A AND B) OR C".
+export const formula = (page) => page.locator('#formula-list .formula-row').evaluateAll((rows) => rows.map((row) => [...row.children]
+  .filter((node) => !node.classList.contains('chip-add'))
+  .map((node) => node.textContent.trim()).join(' ').replace(/\( /g, '(').replace(/ \)/g, ')')));
+export const spec = async (page) => (await snapshot(page)).spec;
 export const inputNames = (page) => page.locator('#inputs-list [data-input]').evaluateAll((nodes) => nodes.map((node) => node.dataset.input));
-export const lampState = (page) => page.locator('#outputs-list [data-output="out"]').getAttribute('data-state');
+export const lampState = (page, id = 'out') => page.locator(`#outputs-list [data-output="${id}"]`).getAttribute('data-state');
 export const truthRows = (page) => page.locator('#truth-table tbody tr').evaluateAll((rows) => rows.map((row) => [...row.querySelectorAll('td')].map((cell) => cell.textContent.trim())));
+
+// Every chip (input, gate, Add gate) opens the one floating #chip-menu.
+export async function openChipMenu(page, selector) {
+  await page.locator(selector).first().click();
+  await expect(page.locator('#chip-menu')).toBeVisible();
+}
+
+export async function chooseChipAction(page, action, value = '') {
+  const item = page.locator(`#chip-menu [data-chip-action="${action}"]${value ? `[data-value="${value}"]` : ''}`);
+  await expect(item).toBeEnabled();
+  await item.click();
+  await expect(page.locator('#chip-menu')).toBeHidden();
+}
+
+// Wrap the whole expression of an output in a gate: "Add gate" → AND/OR/NOT.
+export async function addGate(page, gate, outputId = 'out') {
+  await openChipMenu(page, `#add-gate-${outputId}`);
+  await chooseChipAction(page, 'wrap', gate);
+}
+
+// Fill the truth table and wait for every row to be measured (a short run can
+// finish before a "disabled" check would see it, so wait for the outcome).
+export async function runAll(page, { timeout = 240_000 } = {}) {
+  await page.locator('#fill-truth-table').click();
+  await expect(page.locator('#truth-table caption')).toHaveText('Measured from real probe cells.', { timeout });
+  await expect(page.locator('#fill-truth-table')).toBeEnabled();
+}
+
+// Run until output and wait for every lamp to read HIGH or LOW.
+export async function runUntilSettled(page, { timeout = 240_000 } = {}) {
+  await page.locator('#run-circuit').click();
+  for (const lamp of await page.locator('#outputs-list .lamp').all()) {
+    await expect(lamp).toHaveAttribute('data-state', /^(high|low)$/, { timeout });
+  }
+  await expect(page.locator('#run-circuit')).toBeEnabled();
+}
 
 export async function loadLocalState(page) {
   return page.evaluate(async () => {
