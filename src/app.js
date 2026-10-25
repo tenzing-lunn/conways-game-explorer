@@ -1846,13 +1846,28 @@ function buildSpec(spec) {
 }
 
 // Presets persist as the tree they expand to, so a saved preset reopens as an
-// editable circuit even if the preset list changes later.
+// editable circuit even if the preset list changes later. Their outputs take
+// the short OUT/SUM/CARRY names: the formula line shows the expression, and
+// a name like "A XOR B" would go stale as soon as the tree is edited.
 function expandCircuitSpec(spec) {
-  const normalized = normalizeCircuitSpec(spec);
+  // contractSpec() turns an already-normalized spec (what the pure edit
+  // helpers return) back into a form the contract reads.
+  const normalized = normalizeCircuitSpec(contractSpec(spec));
   if (normalized.kind !== 'preset') return normalized;
   const preset = circuitPresets.find((entry) => entry.id === normalized.id);
   if (!preset) throw new Error(`Unknown circuit "${normalized.id}".`);
-  return normalizeCircuitSpec({ ...preset.spec, inputs: normalized.inputs });
+  return normalizeCircuitSpec({
+    outputs: preset.spec.outputs.map((output) => ({ ...output, label: output.id.toUpperCase() })),
+    inputs: normalized.inputs,
+  });
+}
+
+// Ready-made circuits the engine can build on this board; a preset it
+// rejects (today the full adder, at 16 gates) gets no card.
+let buildablePresets = null;
+function getBuildablePresets() {
+  buildablePresets ??= circuitPresets.filter((preset) => validateSpec(preset.spec).ok);
+  return buildablePresets;
 }
 
 // The rail card that matches the open circuit, if any: a single gate, the
@@ -1863,7 +1878,7 @@ function circuitCardId(spec = state.circuitSpec) {
   const gates = circuitGates(spec);
   if (gates.length === 1) return gates[0];
   const formula = describeSpec(spec).join('|');
-  return circuitPresets.find((preset) => describeSpec(preset.spec).join('|') === formula)?.id || null;
+  return getBuildablePresets().find((preset) => describeSpec(expandCircuitSpec({ preset: preset.id, inputs: {} })).join('|') === formula)?.id || null;
 }
 
 // Everything the renderer labels: gate tiles and the external input ports.
@@ -1988,6 +2003,7 @@ function fitCircuit({ deferred = false } = {}) {
     if (port.side === 'south') { const y = liveAcross(px, board.height - 1, must.bottom + 1, false); if (y !== null) full.bottom = Math.max(full.bottom, y + 8); }
     if (port.side === 'north') { const y = liveAcross(px, 0, must.top - 1, false); if (y !== null) full.top = Math.min(full.top, y - 8); }
     if (port.side === 'east') { const x = liveAcross(py, board.width - 1, must.right + 1, true); if (x !== null) full.right = Math.max(full.right, x + 8); }
+    if (port.side === 'west') { const x = liveAcross(py, 0, must.left - 1, true); if (x !== null) full.left = Math.min(full.left, x - 8); }
   }
   if (full.bottom === must.bottom) full.bottom = must.bottom + (experiment.tiles ? 56 : 16);
   const zoomFor = (region, padX, padY) => Math.min(1,
@@ -2101,8 +2117,9 @@ async function runCircuitExperiment() {
   }
 }
 
+// Input letters in alphabetical order, whatever order the tree uses them in.
 function circuitInputNames(spec = state.circuitSpec) {
-  return spec ? getSpecInputs(contractSpec(spec)) : [];
+  return spec ? [...getSpecInputs(contractSpec(spec))].sort() : [];
 }
 
 // Rough wall-clock estimate for running every input combination, from the
@@ -2226,16 +2243,16 @@ function renderFormula(spec) {
     + `<button class="chip chip-add" id="add-gate-${escapeHtml(output.id)}" type="button" data-chip="add" data-output="${outputIndex}" aria-haspopup="menu" aria-expanded="false"${disabled}>`
     + '<svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg><span>Add gate</span></button>'
     + '</div>').join('');
-  const cap = tryEdit((current) => wrapOutput(current, 0, 'and'));
-  const canAdd = Boolean(cap) && validateSpec(cap).ok;
+  // The note appears once no gate at all can wrap the first output.
+  const attempts = ['and', 'or', 'not'].map((gate) => tryEdit((current) => wrapOutput(current, 0, gate)));
+  const canAdd = attempts.some((attempt) => Boolean(attempt) && validateSpec(attempt).ok);
   elements.chainNote.hidden = canAdd;
-  elements.chainNote.textContent = canAdd ? '' : circuitLimitNote(cap);
+  elements.chainNote.textContent = canAdd ? '' : circuitLimitNote(attempts[0]);
 }
 
-// Plain words for why a gate cannot be added anywhere right now.
+// Plain words for why an edit cannot be built: the engine's own reason.
 function circuitLimitNote(attempt) {
   if (!attempt) return `All ${INPUT_NAMES.length} inputs are in use.`;
-  if (countSpecGates(attempt) > CIRCUIT_MAX_GATES) return `Up to ${CIRCUIT_MAX_GATES} gates.`;
   return validateSpec(attempt).reason || `Up to ${CIRCUIT_MAX_GATES} gates.`;
 }
 
@@ -4146,7 +4163,7 @@ function drawGateThumbnail(thumbCanvas, id) {
 }
 
 // Logic rail cards: the single gates and the half-adder, then the ready-made
-// circuits (XOR, Full adder) that open as editable formulas.
+// circuits (XOR) that open as editable formulas.
 function getLogicCards() {
   return [
     ...circuitExperiments.map((experiment) => ({
@@ -4155,7 +4172,7 @@ function getLogicCards() {
       note: GATE_CARDS[experiment.id]?.note || experiment.description,
       spec: experiment.id === 'half-adder' ? { gates: ['half-adder'], inputs: {} } : { gates: [experiment.id], inputs: {} },
     })),
-    ...circuitPresets.map((preset) => ({ id: preset.id, name: preset.title, note: preset.description, spec: preset.spec })),
+    ...getBuildablePresets().map((preset) => ({ id: preset.id, name: preset.title, note: preset.description, spec: { preset: preset.id, inputs: { ...preset.spec.inputs } } })),
   ];
 }
 

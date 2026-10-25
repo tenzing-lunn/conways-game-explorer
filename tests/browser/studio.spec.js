@@ -150,7 +150,7 @@ test('Logic lists only verified gates; a single AND gate run settles HIGH at gen
   await page.locator('[data-rail-tab="logic"]').click();
   await expect(page.locator('#rail-title')).toHaveText('Components');
   const gates = await page.locator('#logic-list [data-gate-id]').evaluateAll((nodes) => nodes.map((node) => node.dataset.gateId));
-  expect(gates).toEqual(['and', 'or', 'not', 'half-adder', 'xor', 'full-adder']);
+  expect(gates).toEqual(['and', 'or', 'not', 'half-adder', 'xor']);
   await expect(page.locator('#logic-list [data-gate-id="and"]')).toContainText('Outputs a signal only if both inputs are present');
 
   await pickGate(page, isMobile, 'and');
