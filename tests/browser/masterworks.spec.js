@@ -129,7 +129,14 @@ test('the largest masterwork grows the board, fits the view, explains in a toast
   expect(restored.width).toBe(before.width);
   expect(restored.height).toBe(before.height);
   expect(restored.population).toBe(before.population);
+  expect(restored.wrapping, 'Undo brings the previous edge mode back').toBe(before.wrapping);
   await expect(page.locator('#redo')).toBeEnabled();
+
+  await page.locator('#redo').click();
+  const redone = await snapshot(page);
+  expect(redone.width).toBe(work.board.width);
+  expect(redone.population).toBe(grown.population);
+  expect(redone.wrapping, 'Redo makes the board bounded again').toBe(false);
 });
 
 test('search finds masterworks by discoverer', async ({ page, isMobile }) => {

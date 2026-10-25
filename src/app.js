@@ -328,7 +328,7 @@ const bitmap = { canvas: null, context: null, image: null, pixels: null, key: ''
 const state = {
   board: createBoard(DEFAULT_DESIGN_SETTINGS.width, DEFAULT_DESIGN_SETTINGS.height),
   authoredStart: null,
-  history: createBoardHistory(),
+  history: withEdgeMemory(createBoardHistory()),
   clipboard: null,
   selection: null,
   circuit: null,
@@ -968,7 +968,58 @@ function replaceBoard(board, { center = false } = {}) {
 function ownedSnapshot(board = state.board) {
   const snapshot = cloneBoard(board);
   snapshot.population = getPopulation(snapshot);
+  if (board.wrapping !== undefined) snapshot.wrapping = board.wrapping;
   return snapshot;
+}
+
+// The board history keeps boards only. A masterwork load also switches the
+// edges to bounded, so its boards carry a `wrapping` tag that this wrapper
+// keeps in a parallel stack mirroring the history's push, pop and trim order
+// (anchored on entryCount so trimming stays in step). Undo then restores the
+// previous edge mode and Redo makes the board bounded again.
+function withEdgeMemory(history) {
+  const tags = { undo: [], redo: [] };
+  let order = 0;
+  function push(stack, board) {
+    stack.push({ wrapping: board.wrapping, order: order += 1 });
+    while (tags.undo.length + tags.redo.length > history.entryCount) {
+      const oldest = !tags.redo.length || (tags.undo.length && tags.undo[0].order < tags.redo[0].order) ? tags.undo : tags.redo;
+      oldest.shift();
+    }
+  }
+  function tagged(board, entry) {
+    if (entry?.wrapping !== undefined) board.wrapping = entry.wrapping;
+    return board;
+  }
+  return {
+    get canUndo() { return history.canUndo; },
+    get canRedo() { return history.canRedo; },
+    get entryCount() { return history.entryCount; },
+    record(board) {
+      history.record(board);
+      tags.redo.length = 0;
+      push(tags.undo, board);
+    },
+    undo(board) {
+      const previous = history.undo(board);
+      if (!previous) return null;
+      const entry = tags.undo.pop();
+      push(tags.redo, board);
+      return tagged(previous, entry);
+    },
+    redo(board) {
+      const next = history.redo(board);
+      if (!next) return null;
+      const entry = tags.redo.pop();
+      push(tags.undo, board);
+      return tagged(next, entry);
+    },
+    clear() {
+      history.clear();
+      tags.undo.length = 0;
+      tags.redo.length = 0;
+    },
+  };
 }
 
 function loadSimulation(board = state.board, { wrapping = state.designSettings.wrapping } = {}) {
@@ -981,14 +1032,16 @@ function loadSimulation(board = state.board, { wrapping = state.designSettings.w
   return load;
 }
 
-function beginAuthoringCommand() {
+function beginAuthoringCommand({ rememberEdges = false } = {}) {
   if (state.playing) {
     state.playing = false;
     updatePlayButton();
   }
   state.simulation?.cancel();
   loadSimulation();
-  state.history.record(ownedSnapshot());
+  const snapshot = ownedSnapshot();
+  if (rememberEdges) snapshot.wrapping = state.designSettings.wrapping;
+  state.history.record(snapshot);
 }
 
 function finishAuthoringCommand({ keepSelection = false } = {}) {
@@ -1098,13 +1151,15 @@ function redoBoard() {
 // the grid was resized); the settings and the view follow it.
 function restoreHistoryBoard(board) {
   const resized = board.width !== state.board.width || board.height !== state.board.height;
+  const edgesChanged = board.wrapping !== undefined && board.wrapping !== state.designSettings.wrapping;
+  if (edgesChanged) state.designSettings = mergeDesignSettings(state.designSettings, { wrapping: board.wrapping });
   replaceBoard(board);
   state.authoredStart = ownedSnapshot(board);
   if (resized) {
     state.designSettings = mergeDesignSettings(state.designSettings, { gridPreset: 'custom', width: board.width, height: board.height });
-    syncDesignControls();
     fitBoard();
   }
+  if (resized || edgesChanged) syncDesignControls();
   markDesignDirty(true);
   updateHistoryControls();
 }
@@ -1303,6 +1358,7 @@ function applyEdgesChoice(value) {
   const wrapping = value === 'wrapped';
   if (wrapping === state.designSettings.wrapping) return;
   state.designSettings = mergeDesignSettings(state.designSettings, { wrapping });
+  delete state.board.wrapping; // the choice is the builder's now, not the masterwork's
   loadSimulation();
   markDesignDirty(true);
   syncDesignControls();
@@ -3045,7 +3101,7 @@ function swapWorkspace(owner) {
   const next = state.workspaces[owner] || {
     board: fresh,
     authoredStart: cloneBoard(fresh),
-    history: createBoardHistory(),
+    history: withEdgeMemory(createBoardHistory()),
     designSettings: DEFAULT_DESIGN_SETTINGS,
     selection: null,
     circuit: null,
@@ -3955,12 +4011,13 @@ async function loadMasterwork(id) {
     showToast(`${work.name} needs a board of at least ${bounds.width} × ${bounds.height}.`, { kind: 'error' });
     return;
   }
-  beginAuthoringCommand();
+  beginAuthoringCommand({ rememberEdges: true });
   exitCircuit();
   state.designSettings = mergeDesignSettings(state.designSettings, grew
     ? { gridPreset: 'custom', width, height, wrapping: false }
     : { wrapping: false });
   const board = createBoard(width, height);
+  board.wrapping = false;
   const originX = Math.floor((width - bounds.width) / 2) - bounds.minX;
   const originY = Math.floor((height - bounds.height) / 2) - bounds.minY;
   for (const [x, y] of coordinates) board.cells[(originY + y) * width + originX + x] = 1;
