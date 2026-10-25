@@ -1,18 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
+  CIRCUIT_MAX_CHAIN_GATES,
+  CIRCUIT_MAX_GATES,
+  buildCircuit,
   buildCircuitChain,
   buildCircuitExperiment,
   circuitExperiments,
   circuitGateCatalog,
+  circuitPresets,
   createCircuitStepper,
   getCircuitChainInputs,
   getCircuitChainTruthTable,
+  getCircuitTruthTable,
   readCircuitOutputs,
   resetCircuitExperiment,
   runCircuitChainToObservation,
+  validateCircuit,
   validateCircuitChain,
 } from './circuits.js';
+import { gateNode, inputNode } from './circuit-spec.js';
 
 const CASES = [
   ['and', { a: false, b: false }, [false]],
@@ -136,7 +144,7 @@ test('unsupported chains are rejected with a reason, by validate and by build', 
     [['and', 'half-adder'], /half-adder is standalone/],
     [['half-adder'], /half-adder is standalone/],
     [['and', 'xor'], /Unknown gate "xor"/],
-    [['and', 'and', 'and', 'and'], /longer than 3 gates/],
+    [Array(CIRCUIT_MAX_CHAIN_GATES + 1).fill('and'), /Up to 6 gates in one chain\./],
   ];
   for (const [gates, pattern] of rejected) {
     const result = validateCircuitChain(gates);
@@ -231,4 +239,160 @@ test('getCircuitChainTruthTable simulates every input combination', () => {
     { inputs: { a: false, b: true }, outputs: { out: true } },
     { inputs: { a: true, b: true }, outputs: { out: false } },
   ]);
+  assert.deepEqual(getCircuitTruthTable({ gates: ['not', 'and'] }), rows);
+});
+
+// Branching circuits ---------------------------------------------------------
+
+const g = gateNode;
+const i = inputNode;
+
+function hashBoard(experiment) {
+  const hash = createHash('sha256');
+  hash.update(`${experiment.board.width}x${experiment.board.height}:`);
+  hash.update(experiment.board.cells);
+  return hash.digest('hex');
+}
+
+function runSpec(spec) {
+  const experiment = buildCircuit(spec);
+  const stepper = createCircuitStepper(experiment);
+  let board = experiment.board;
+  while (board.generation < experiment.observeGeneration) board = stepper.step();
+  return { experiment, board, outputs: readCircuitOutputs(experiment, board) };
+}
+
+function assertTruthTable(spec, rows = getCircuitTruthTable(spec)) {
+  for (const row of rows) {
+    const { outputs } = runSpec({ ...spec, inputs: row.inputs });
+    const read = Object.fromEntries(outputs.map((output) => [output.id, output.high]));
+    assert.deepEqual(read, row.outputs, JSON.stringify(row.inputs));
+    for (const output of outputs) assert.equal(output.population, output.high ? 9 : 0);
+  }
+}
+
+test('legacy chains build byte-identical boards, directly and through buildCircuit', () => {
+  // SHA-256 of `${width}x${height}:` + cells, recorded before the branching engine existed.
+  const snapshot = {
+    'and|11': '1c7124ab75538bf626cb30f0ef2c09a7453b53a2558d6a342420870e15a60470',
+    'or|11': '1d03fa7d7c235191c1fad3be929af95776a79c3749e95059c245483c66e9b427',
+    'not|1': '9cab6c479b599e9e1068522a4ab4e6dafec99653ce92e9d2a15b0d8f838f8c1d',
+    'and>or>not|101': '8b6a77c6b146a42cfbcc1161431a5ee6c260cfbe24802f7c6c0282227d5be7a7',
+    'or>or>or|1111': '07565e9146af675905dc9764f1d46f2744ed4cfde2aa225174551f0106149e5c',
+    'not>not>not|1': 'b2a380a9de647625f9bdecbb8b4c34b7086c7210c68f460cfdaf7dc43da546ce',
+    'and>and>and|1111': 'c84a0a17361fbe6484b7bbe4b9304807949f06ecdafdacb25a5a060a513f6afc',
+  };
+  for (const [key, expected] of Object.entries(snapshot)) {
+    const [chain, bits] = key.split('|');
+    const gates = chain.split('>');
+    const inputs = {};
+    [...bits].forEach((bit, index) => { inputs[String.fromCharCode(97 + index)] = bit === '1'; });
+    const direct = buildCircuitChain({ gates, inputs });
+    const viaSpec = buildCircuit({ gates, inputs });
+    assert.equal(hashBoard(direct), expected, key);
+    assert.equal(hashBoard(viaSpec), expected, key);
+    assert.equal(viaSpec.id, `chain:${gates.join('>')}`);
+    assert.deepEqual(viaSpec.tiles, direct.tiles);
+    assert.deepEqual(viaSpec.ports, direct.ports);
+    assert.deepEqual(viaSpec.spec, { gates, inputs });
+  }
+  assert.equal(buildCircuit({ gates: ['and'], inputs: { a: true, b: true } }).id, 'chain:and');
+});
+
+test('validateCircuit explains every unsupported shape in plain English', () => {
+  assert.equal(CIRCUIT_MAX_CHAIN_GATES, 6);
+  assert.equal(CIRCUIT_MAX_GATES, 10);
+  const cases = [
+    [{ preset: 'nand' }, 'Unknown circuit preset "nand".'],
+    [{ outputs: [{ tree: g('or', g('and', i('a'), i('b')), g('and', i('c'), i('d'))) }] }, 'An OR gate can take only one other gate as an input here; its other input must be a switch.'],
+    [{ outputs: [{ tree: g('and', g('not', i('a')), g('not', i('b'))) }] }, 'An AND gate can take at most one input that runs through a NOT gate.'],
+    [{ gates: Array(7).fill('or') }, 'Up to 6 gates in one chain.'],
+    [{ outputs: [{ tree: Array(11).fill('and').reduce((tree, gate, index) => g(gate, tree, i(String.fromCharCode(98 + (index % 7)))), i('a')) }] }, 'Circuits here can use up to 10 gates.'],
+    [{ preset: 'full-adder' }, 'Circuits here can use up to 10 gates.'],
+  ];
+  for (const [spec, reason] of cases) {
+    assert.deepEqual(validateCircuit(spec), { ok: false, reason });
+    assert.throws(() => buildCircuit(spec), new RegExp(reason.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  for (const spec of [
+    { preset: 'xor' },
+    { gates: ['half-adder'] },
+    { gates: Array(6).fill('and') },
+    { outputs: [{ tree: g('and', g('or', i('a'), i('b')), g('not', g('and', i('a'), i('b')))) }] }, // AND swaps its NOT operand to the A side
+    { outputs: [{ tree: g('or', i('a'), g('and', i('b'), i('c'))) }] }, // OR swaps its gate operand to the A side
+  ]) assert.deepEqual(validateCircuit(spec), { ok: true, reason: null }, JSON.stringify(spec));
+});
+
+test('presets carry ids, names, descriptions and expected truth tables', () => {
+  assert.deepEqual(circuitPresets.map((preset) => [preset.id, preset.name]), [['xor', 'XOR'], ['full-adder', 'Full adder']]);
+  for (const preset of circuitPresets) assert.match(preset.description, /^[A-Z].*\.$/);
+  assert.deepEqual(getCircuitTruthTable({ preset: 'xor' }).map((row) => row.outputs.out), [false, true, true, false]);
+  const adder = getCircuitTruthTable({ preset: 'full-adder' });
+  assert.equal(adder.length, 8);
+  for (const row of adder) {
+    const total = Number(row.inputs.a) + Number(row.inputs.b) + Number(row.inputs.c);
+    assert.deepEqual(row.outputs, { sum: total % 2 === 1, carry: total >= 2 });
+  }
+  assert.deepEqual(getCircuitTruthTable({ gates: ['half-adder'] }).map((row) => [row.outputs.sum, row.outputs.carry]), [[false, false], [true, false], [true, false], [false, true]]);
+});
+
+test('XOR preset builds a real four-tile circuit with one reflected tile and reads correctly for all four rows', () => {
+  const experiment = buildCircuit({ preset: 'xor', inputs: { a: true } });
+  assert.equal(experiment.id, 'preset:xor');
+  assert.equal(experiment.title, 'XOR');
+  assert.deepEqual(experiment.spec, { preset: 'xor', inputs: { a: true, b: false } });
+  assert.deepEqual(experiment.inputs, { a: true, b: false });
+  assert.equal(experiment.tiles.length, 4);
+  assert.deepEqual(experiment.tiles.map((tile) => tile.gateId), ['and', 'not', 'and', 'or']);
+  const reflected = experiment.tiles.filter((tile) => tile.mirrored);
+  assert.equal(reflected.length, 1);
+  assert.equal(reflected[0].rotation, 90);
+  assert.equal(reflected[0].output.side, 'north');
+  assert.deepEqual(reflected[0].inputs.map((input) => input.side), ['south', 'west']);
+  assert.deepEqual(experiment.ports.filter((port) => port.type === 'input').map((port) => port.name), ['a', 'b', 'a', 'b']);
+  assert.equal(experiment.ports.at(-1).type, 'output');
+  assert.equal(experiment.outputs[0].label, 'A XOR B');
+  assert.ok(experiment.board.width <= 3000 && experiment.board.height <= 3000);
+  assertTruthTable({ preset: 'xor' });
+});
+
+test('a branching tree reads correctly for every row and resets to its authored board', () => {
+  const spec = { outputs: [{ id: 'out', label: 'OUT', tree: g('and', i('a'), g('and', i('c'), i('d'))) }] };
+  const experiment = buildCircuit({ ...spec, inputs: { a: true, c: true, d: true } });
+  assert.equal(experiment.id, 'tree:and(a,and(c,d))');
+  assert.deepEqual(experiment.tiles.map((tile) => [tile.gateId, tile.mirrored]), [['and', false], ['and', true]]);
+  assert.equal(experiment.tiles[1].x, experiment.tiles[0].x - 4);
+  assert.ok(experiment.tiles[1].y > experiment.tiles[0].y + 150);
+  const reset = resetCircuitExperiment(experiment);
+  assert.deepEqual(reset.board.cells, experiment.authoredBoard.cells);
+  assert.equal(reset.observeGeneration, experiment.observeGeneration);
+  assertTruthTable(spec);
+});
+
+test('two outputs share one observation generation and both probes read from real cells', () => {
+  const spec = { outputs: [{ id: 'x', label: 'X', tree: g('and', g('and', i('a'), i('b')), i('c')) }, { id: 'y', label: 'Y', tree: g('or', i('a'), i('b')) }] };
+  const { experiment, outputs } = runSpec({ ...spec, inputs: { a: true, b: true, c: false } });
+  assert.deepEqual(outputs.map((output) => [output.id, output.high, output.population]), [['x', false, 0], ['y', true, 9]]);
+  assert.equal(experiment.observeGeneration, 900);
+  assert.equal(experiment.outputs[1].x - experiment.outputs[0].x, 150, 'the faster OR output spends its 300 spare generations as 150 cells of wire before its probe');
+  assert.ok(experiment.outputs[1].y > experiment.outputs[0].y);
+  assertTruthTable(spec, [{ inputs: { a: true, b: true, c: true }, outputs: { x: true, y: true } }]);
+});
+
+test('chains of four to six gates build through the branching engine with chain ids and tile positions', () => {
+  const gates = ['and', 'or', 'and', 'or'];
+  const experiment = buildCircuitChain({ gates, inputs: { a: true, b: true, c: false, d: true, e: false } });
+  assert.equal(experiment.id, 'chain:and>or>and>or');
+  assert.deepEqual(experiment.gates, gates);
+  assert.deepEqual(experiment.tiles.map((tile) => [tile.gateId, tile.x, tile.y]), [['or', 930, 20], ['and', 780, 20], ['or', 630, 20], ['and', 480, 20]]);
+  assert.equal(experiment.outputs[0].label, '((A AND B) OR C) AND D) OR E'.replace('((A AND B) OR C) AND D) OR E', '(((A AND B) OR C) AND D) OR E'));
+  assert.equal(experiment.observeGeneration, 600 + 300 + 420 + 300);
+  assert.ok(experiment.board.width <= 3000 && experiment.board.height <= 3000);
+  assertTruthTable({ gates }, [
+    { inputs: { a: true, b: true, c: false, d: true, e: false }, outputs: { out: true } },
+    { inputs: { a: true, b: false, c: false, d: true, e: false }, outputs: { out: false } },
+  ]);
+  const six = buildCircuit({ gates: Array(6).fill('not') });
+  assert.equal(six.tiles.length, 6);
+  assert.ok(six.board.width <= 3000 && six.board.height <= 3000);
 });
