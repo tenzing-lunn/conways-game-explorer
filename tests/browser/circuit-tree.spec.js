@@ -183,6 +183,12 @@ test('phone: the formula editor works in the inspector sheet with 40px targets a
   const chipHeights = await page.locator('#formula-list .chip').evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
   expect(Math.min(...chipHeights)).toBeGreaterThanOrEqual(40);
   expect(await lampIds(page)).toEqual(['sum', 'carry']);
+  // Each input row is a 40px label: tapping the letter toggles the switch.
+  const rowHeights = await page.locator('#inputs-list .switch-row').evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
+  expect(Math.min(...rowHeights)).toBeGreaterThanOrEqual(40);
+  const wasOn = await page.locator('#inputs-list [data-input="a"]').isChecked();
+  await page.locator('#inputs-list .switch-row:has([data-input="a"]) > span').tap();
+  await expect(page.locator('#inputs-list [data-input="a"]')).toBeChecked({ checked: !wasOn });
 
   await openChipMenu(page, '#formula-list [data-chip="input"][data-input="c"]');
   const menu = await page.locator('#chip-menu').boundingBox();

@@ -455,6 +455,11 @@ input.project-title:focus {
     gap: 6px;
   }
 
+  /* The whole input row is the switch; a 40px tap target on phones. */
+  .switch-row {
+    min-height: 40px;
+  }
+
   .chip {
     height: 40px;
     padding: 0 8px 0 12px;
