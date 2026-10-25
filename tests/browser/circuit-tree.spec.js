@@ -59,7 +59,7 @@ test.describe('desktop', () => {
 
     await runAll(page, { timeout: 540_000 });
     expect(await truthRows(page)).toEqual([['0', '0', '0'], ['0', '1', '1'], ['1', '0', '1'], ['1', '1', '0']]);
-    await expect(page.locator('#truth-table caption')).toHaveText('Measured from real probe cells.');
+    await expect(page.locator('#truth-table caption')).toHaveText('Each row was run on the board.');
   });
 
   test('the half-adder shows Sum and Carry lamps, two probes, and a four-row table with two output columns', async ({ page, isMobile }) => {
@@ -67,7 +67,7 @@ test.describe('desktop', () => {
     await pickGate(page, isMobile, 'half-adder');
     await expect(page.locator('#logic-list [data-gate-id="half-adder"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('#formula-list')).toBeHidden();
-    await expect(page.locator('#chain-note')).toHaveText('Standalone component.');
+    await expect(page.locator('#chain-note')).toHaveText('Built as one fixed circuit with two outputs, so its gates cannot be changed here.');
     expect(await lampIds(page)).toEqual(['sum', 'carry']);
     await expect(page.locator('#outputs-list .lamp-row > span:first-child')).toHaveText(['Sum', 'Carry']);
     expect(await inputNames(page)).toEqual(['a', 'b']);
@@ -90,6 +90,20 @@ test.describe('desktop', () => {
       ['1', '0', '1', '0'],
       ['1', '1', '0', '1'],
     ]);
+    // After Run all the lamps show the measured row for the switches as set.
+    expect(await lampState(page, 'sum')).toBe('low');
+    expect(await lampState(page, 'carry')).toBe('high');
+    await setSwitches(page, { b: false });
+    expect(await lampState(page, 'sum')).toBe('high');
+    expect(await lampState(page, 'carry')).toBe('low');
+
+    // Opening another circuit from the rail shows its heading and formula.
+    await page.locator('#inspector').evaluate((node) => { node.scrollTop = node.scrollHeight; });
+    expect(await page.locator('#inspector').evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    await pickGate(page, isMobile, 'xor');
+    expect(await page.locator('#inspector').evaluate((node) => node.scrollTop)).toBe(0);
+    await expect(page.locator('#circuit-heading')).toBeInViewport();
+    await expect(page.locator('#formula-list')).toBeInViewport();
   });
 
   test('(A OR B) AND (A OR C) can be built from the chip menus, measured, saved and reloaded', async ({ page, isMobile }) => {
@@ -177,6 +191,9 @@ test.describe('desktop', () => {
     const growAnd = page.locator('#chip-menu [data-chip-action="grow"][data-value="and"]');
     await expect(growAnd).toBeDisabled();
     expect(await growAnd.getAttribute('title')).toMatch(/OR gate/);
+    // The reason is on screen inside the menu, not only in a tooltip.
+    await expect(page.locator('#chip-menu .menu-reason')).toHaveText([/OR gate can take only one other gate/]);
+    await expect(page.locator('#chip-menu .menu-reason')).toBeVisible();
     await page.keyboard.press('Escape');
 
     // A plain chain stops at the chain cap.
@@ -185,7 +202,9 @@ test.describe('desktop', () => {
     expect((await snapshot(page)).gates).toHaveLength(maxChain);
     await expect(page.locator('#chain-note')).toHaveText(`Up to ${maxChain} gates in one chain.`);
     await openChipMenu(page, '#add-gate-out');
+    await expect(page.locator('#chip-menu [data-chip-action="wrap"]')).toHaveText(['Wrap in AND', 'Wrap in OR', 'Wrap in NOT']);
     for (const item of await page.locator('#chip-menu [data-chip-action="wrap"]').all()) await expect(item).toBeDisabled();
+    await expect(page.locator('#chip-menu .menu-reason')).toHaveText([`Up to ${maxChain} gates in one chain.`]);
     await page.keyboard.press('Escape');
     await expect(page.locator('#chip-menu')).toBeHidden();
 
@@ -198,6 +217,7 @@ test.describe('desktop', () => {
     await expect(page.locator('#chain-note')).toHaveText(`Circuits here can use up to ${maxGates} gates.`);
     await openChipMenu(page, '#add-gate-out');
     await expect(page.locator('#chip-menu [data-chip-action="wrap"][data-value="not"]')).toBeDisabled();
+    await expect(page.locator('#chip-menu .menu-reason')).toHaveText([`Circuits here can use up to ${maxGates} gates.`]);
     await page.keyboard.press('Escape');
     await expect(page.locator('#chip-menu')).toBeHidden();
   });
@@ -241,6 +261,14 @@ test('phone: the formula editor works in the inspector sheet with 40px targets a
   await chooseChipAction(page, 'use', 'a');
   expect(await spec(page)).toEqual(['OUT = (A AND B) OR A']);
   expect(await inputNames(page)).toEqual(['a', 'b']);
+  // No hover on a phone: the reason for greyed items reads inside the menu.
+  await openChipMenu(page, '#formula-list [data-chip="input"][data-path="b"]');
+  await expect(page.locator('#chip-menu [data-chip-action="grow"][data-value="and"]')).toBeDisabled();
+  const reason = page.locator('#chip-menu .menu-reason');
+  await expect(reason).toBeInViewport();
+  await expect(reason).toContainText('OR gate');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#chip-menu')).toBeHidden();
 
   const overflow = await page.evaluate(() => ({
     page: document.documentElement.scrollWidth > window.innerWidth,

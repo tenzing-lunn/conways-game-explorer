@@ -142,12 +142,12 @@
               <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
               <input id="pattern-search" type="search" placeholder="Search patterns" aria-label="Search patterns" autocomplete="off" />
             </label>
-            <div id="pattern-tabs" class="pattern-tabs" role="tablist" aria-label="Pattern groups"></div>
+            <div class="pattern-tabs-wrap"><div id="pattern-tabs" class="pattern-tabs" role="tablist" aria-label="Pattern groups"></div></div>
             <div id="pattern-list" class="card-list" role="list"></div>
           </section>
           <!-- STUDIO: logic panel -->
           <section id="logic-panel" class="rail-panel" hidden>
-            <p class="rail-note">Pick a gate. Flip its inputs in the inspector, then run until the output settles.</p>
+            <p class="rail-note">Pick a gate, then flip its inputs and run it in the Experiment panel.</p>
             <div id="logic-list" class="card-list" role="list"></div>
           </section>
           <!-- /STUDIO -->
@@ -263,6 +263,14 @@
               </div>
             </div>
 
+            <div id="circuit-bar" class="circuit-bar mobile-only" role="group" aria-label="Circuit" hidden>
+              <div id="circuit-bar-lamps" class="circuit-bar-lamps"></div>
+              <span id="circuit-bar-progress" class="circuit-bar-progress mono"></span>
+              <button id="run-circuit-bar" class="button button-primary" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-play" /></svg><span>Run</span>
+              </button>
+            </div>
+
             <div id="transport" class="transport">
               <button id="play-toggle" class="button button-primary" type="button" aria-label="Play">
                 <svg class="icon icon-play" aria-hidden="true"><use href="#i-play" /></svg>
@@ -338,9 +346,17 @@
                 <option value="small">120 × 80</option>
                 <option value="medium" selected>300 × 200</option>
                 <option value="large">420 × 280</option>
-                <option value="custom" hidden>Custom</option>
+                <option value="current" hidden></option>
+                <option value="custom">Custom…</option>
               </select>
             </label>
+            <div id="grid-custom" class="grid-custom" hidden>
+              <label><span>Width</span><input id="grid-width" type="number" min="40" max="3000" step="1" inputmode="numeric" /></label>
+              <span class="grid-custom-times" aria-hidden="true">×</span>
+              <label><span>Height</span><input id="grid-height" type="number" min="40" max="3000" step="1" inputmode="numeric" /></label>
+              <button id="grid-apply" class="button button-small" type="button">Apply</button>
+              <p id="grid-custom-note" class="inspector-note">40 to 3,000 cells on each side.</p>
+            </div>
             <label class="field-row">
               <span>Edges</span>
               <select id="edges">

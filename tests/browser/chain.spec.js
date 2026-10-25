@@ -69,7 +69,7 @@ test.describe('desktop', () => {
 
     await pickGate(page, isMobile, 'half-adder');
     await expect(page.locator('#formula-list')).toBeHidden();
-    await expect(page.locator('#chain-note')).toHaveText('Standalone component.');
+    await expect(page.locator('#chain-note')).toHaveText('Built as one fixed circuit with two outputs, so its gates cannot be changed here.');
     expect(await page.locator('#outputs-list .lamp-row > span:first-child').allInnerTexts()).toEqual(['Sum', 'Carry']);
     expect(await inputNames(page)).toEqual(['a', 'b']);
     expect((await snapshot(page)).gates).toEqual(['half-adder']);

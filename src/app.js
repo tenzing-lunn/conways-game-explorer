@@ -94,8 +94,6 @@ const MAX_ZOOM = 3.6;
 // Below this on-screen cell size, cells are drawn through a downsampled bitmap
 // where a pixel lights when any cell under it is alive.
 const BITMAP_CELL_SIZE = 1.5;
-// Masterworks wider than this get a size badge instead of a thumbnail.
-const THUMBNAIL_MAX_WIDTH = 200;
 const MAX_MAIN_THREAD_CATCH_UP_STEPS = 4;
 const SPEED_STEPS = [1, 2, 5, 10, 20, 40];
 const MOBILE_QUERY = window.matchMedia('(max-width: 899px)');
@@ -140,6 +138,11 @@ const GATE_CARDS = {
   or: { name: 'OR', note: 'Outputs a signal if either input is present' },
   not: { name: 'NOT', note: 'Outputs a signal only when input A is absent' },
   'half-adder': { name: 'Half-adder', note: 'Adds two bits. Outputs Sum and Carry.' },
+};
+
+// Card notes for ready-made circuits, in terms of behaviour, not wiring.
+const PRESET_NOTES = {
+  xor: 'On when exactly one input is on.',
 };
 
 // The Library's last group: famous large patterns from masterworks.js.
@@ -244,6 +247,10 @@ const elements = {
   inspector: $('#inspector'),
   inspectorClose: $('#inspector-close'),
   gridSize: $('#grid-size'),
+  gridCustom: $('#grid-custom'),
+  gridWidth: $('#grid-width'),
+  gridHeight: $('#grid-height'),
+  gridApply: $('#grid-apply'),
   edges: $('#edges'),
   circuitSection: $('#circuit-section'),
   circuitName: $('#circuit-name'),
@@ -253,6 +260,10 @@ const elements = {
   inputsList: $('#inputs-list'),
   outputsList: $('#outputs-list'),
   runCircuit: $('#run-circuit'),
+  circuitBar: $('#circuit-bar'),
+  circuitBarLamps: $('#circuit-bar-lamps'),
+  circuitBarProgress: $('#circuit-bar-progress'),
+  runCircuitBar: $('#run-circuit-bar'),
   runProgress: $('#run-progress'),
   runProgressBar: $('#run-progress-bar'),
   runProgressText: $('#run-progress-text'),
@@ -1327,9 +1338,33 @@ function resizeBoardKeepingCells(width, height) {
   return next;
 }
 
-function applyGridSizeChoice(gridPreset) {
-  const next = mergeDesignSettings(state.designSettings, { gridPreset });
-  applyBoardSize(next);
+// The Grid size menu: three presets, the current size when it is none of
+// them, and "Custom…", which opens width and height fields with Apply.
+function applyGridSizeChoice(choice) {
+  if (choice === 'custom') {
+    elements.gridCustom.hidden = false;
+    elements.gridWidth.value = String(state.board.width);
+    elements.gridHeight.value = String(state.board.height);
+    elements.gridWidth.focus({ preventScroll: true });
+    return;
+  }
+  elements.gridCustom.hidden = true;
+  if (choice === 'current') return;
+  applyBoardSize(mergeDesignSettings(state.designSettings, { gridPreset: choice }));
+}
+
+function applyCustomGridSize() {
+  const read = (input) => Math.round(Number(input.value));
+  const width = read(elements.gridWidth);
+  const height = read(elements.gridHeight);
+  const valid = (value) => Number.isFinite(value) && value >= 40 && value <= 3000;
+  if (!valid(width) || !valid(height)) {
+    showToast('Width and height must each be between 40 and 3,000 cells.', { kind: 'error' });
+    return;
+  }
+  elements.gridCustom.hidden = true;
+  applyBoardSize({ ...mergeDesignSettings(state.designSettings, { gridPreset: 'custom', width, height }), width, height });
+  syncDesignControls();
 }
 
 // Resize the board keeping its cells (an undoable command), then refit.
@@ -1366,12 +1401,15 @@ function applyEdgesChoice(value) {
 
 function syncDesignControls() {
   const settings = state.designSettings;
-  const custom = elements.gridSize.querySelector('option[value="custom"]');
-  const isPresetSize = ['small', 'medium', 'large'].includes(settings.gridPreset)
-    && createDesignSettings({ gridPreset: settings.gridPreset }).width === state.board.width;
-  custom.hidden = isPresetSize;
-  custom.textContent = `${state.board.width} × ${state.board.height}`;
-  elements.gridSize.value = isPresetSize ? settings.gridPreset : 'custom';
+  const current = elements.gridSize.querySelector('option[value="current"]');
+  const preset = ['small', 'medium', 'large'].find((id) => {
+    const size = createDesignSettings({ gridPreset: id });
+    return size.width === state.board.width && size.height === state.board.height;
+  });
+  current.hidden = Boolean(preset);
+  current.textContent = `${state.board.width} × ${state.board.height}`;
+  if (!elements.gridCustom.hidden) elements.gridSize.value = 'custom';
+  else elements.gridSize.value = preset || 'current';
   elements.edges.value = settings.wrapping ? 'wrapped' : 'bounded';
 }
 
@@ -1913,6 +1951,7 @@ function exitCircuit() {
   state.circuitOutputs = null;
   state.truthRows = null;
   updatePresetSelection();
+  renderCircuitBar();
 }
 
 function openCircuit(spec, { fit = true } = {}) {
@@ -1923,6 +1962,10 @@ function openCircuit(spec, { fit = true } = {}) {
   state.circuit = experiment;
   state.circuitOutputs = null;
   if (state.truthRows?.key !== truthKey(normalized)) state.truthRows = null;
+  // A measured truth table already knows the outputs for these switches.
+  const measured = state.truthRows?.rows.find((row) => row.outputs
+    && Object.entries(row.inputs).every(([name, value]) => Boolean(normalized.inputs[name]) === Boolean(value)));
+  if (measured) state.circuitOutputs = measured.outputs.map((output) => ({ ...output }));
   state.designSettings = mergeDesignSettings(state.designSettings, {
     gridPreset: 'custom',
     width: experiment.board.width,
@@ -2182,14 +2225,17 @@ function renderInspector() {
   const experiment = state.circuit;
   elements.circuitSection.hidden = !experiment;
   renderVersionHistory(getActiveCreation());
-  if (!experiment) return;
+  if (!experiment) {
+    renderCircuitBar();
+    return;
+  }
 
   const spec = state.circuitSpec;
   const cardId = circuitCardId(spec);
-  const card = GATE_CARDS[cardId] || circuitPresets.find((preset) => preset.id === cardId);
+  const card = getLogicCards().find((entry) => entry.id === cardId);
   const gateCount = spec.kind === 'tree' ? countSpecGates(spec) : 1;
   elements.circuitName.textContent = card
-    ? `${card.name || card.title}: ${card.note || card.description}`
+    ? `${card.name}: ${card.note}`
     : `${gateCount} gates. Choose any part of the formula to change it.`;
   renderFormula(spec);
 
@@ -2233,7 +2279,7 @@ function renderFormula(spec) {
   elements.formulaList.hidden = !editable;
   if (!editable) {
     elements.chainNote.hidden = false;
-    elements.chainNote.textContent = 'Standalone component.';
+    elements.chainNote.textContent = 'Built as one fixed circuit with two outputs, so its gates cannot be changed here.';
     return;
   }
   const disabled = state.circuitRunning ? ' disabled' : '';
@@ -2276,9 +2322,18 @@ function openChipMenu(chip) {
   const path = chip.dataset.path ? chip.dataset.path.split('.') : [];
   const kind = chip.dataset.chip;
   const items = [];
+  // Disabled items say why on screen: after each group, one muted line per
+  // distinct reason (a phone has no hover to show a title).
+  let reasons = [];
   const option = (action, value, label, candidate) => {
     const ok = Boolean(candidate) && validateSpec(candidate).ok;
-    items.push(`<button type="button" role="menuitem" data-chip-action="${action}" data-value="${value}"${ok ? '' : ' disabled'} ${ok ? '' : `title="${escapeHtml(circuitLimitNote(candidate))}"`}>${label}</button>`);
+    const reason = ok ? '' : circuitLimitNote(candidate);
+    if (reason && !reasons.includes(reason)) reasons.push(reason);
+    items.push(`<button type="button" role="menuitem" data-chip-action="${action}" data-value="${value}"${ok ? '' : ` disabled title="${escapeHtml(reason)}"`}>${label}</button>`);
+  };
+  const endGroup = () => {
+    for (const reason of reasons) items.push(`<p class="menu-reason">${escapeHtml(reason)}</p>`);
+    reasons = [];
   };
   if (kind === 'input') {
     const used = circuitInputNames(spec);
@@ -2287,6 +2342,7 @@ function openChipMenu(chip) {
       if (name === chip.dataset.input) continue;
       option('use', name, `Use ${name.toUpperCase()}${used.includes(name) ? '' : ' (new)'}`, tryEdit((current) => setLeafInput(current, outputIndex, path, name)));
     }
+    endGroup();
     items.push('<hr class="menu-divider" />');
     for (const gate of ['and', 'or', 'not']) {
       option('grow', gate, `Replace with ${gate.toUpperCase()}`, tryEdit((current) => growLeaf(current, outputIndex, path, gate)));
@@ -2295,9 +2351,10 @@ function openChipMenu(chip) {
     option('remove', '', 'Remove this gate', tryEdit((current) => removeGate(current, outputIndex, path)));
   } else {
     for (const gate of ['and', 'or', 'not']) {
-      option('wrap', gate, gate.toUpperCase(), tryEdit((current) => wrapOutput(current, outputIndex, gate)));
+      option('wrap', gate, `Wrap in ${gate.toUpperCase()}`, tryEdit((current) => wrapOutput(current, outputIndex, gate)));
     }
   }
+  endGroup();
   closeMenus();
   state.chipMenu = { outputIndex, path, kind, chip };
   elements.chipMenu.innerHTML = items.join('');
@@ -2346,7 +2403,8 @@ function renderRunProgress() {
   if (!experiment) return;
   const filling = state.circuitRunning && state.truthRows?.current > 0;
   const running = state.circuitRunning && state.circuitOutputs?.some((output) => output.settled === false);
-  const settled = Boolean(state.circuitOutputs?.length) && !running;
+  // Lamps read from the truth table have no run of their own to show.
+  const settled = Boolean(state.circuitOutputs?.length) && !running && state.board.generation > 0;
   const generation = Math.min(filling ? state.truthRows.generation : state.board.generation, experiment.observeGeneration);
   const visible = filling || running || settled;
   elements.runProgress.hidden = !visible;
@@ -2356,6 +2414,27 @@ function renderRunProgress() {
   elements.runProgressText.textContent = filling
     ? `Row ${state.truthRows.current} of ${state.truthRows.rows.length}`
     : `generation ${generation.toLocaleString()} / ${experiment.observeGeneration.toLocaleString()}`;
+  renderCircuitBar();
+}
+
+// Phone only: with the Experiment sheet closed, a slim bar above the bottom
+// controls keeps the lamps and Run in reach while the board shows the run.
+function renderCircuitBar() {
+  const experiment = state.mode === 'studio' ? state.circuit : null;
+  elements.circuitBar.hidden = !experiment;
+  if (!experiment) return;
+  elements.circuitBarLamps.innerHTML = experiment.outputs.map((port) => {
+    const lampState = getLampState(state.circuitOutputs?.find((candidate) => candidate.id === port.id) || null);
+    return `<span class="bar-lamp" data-bar-output="${port.id}"><span class="bar-lamp-name">${escapeHtml(outputLabel(port))}</span>`
+      + `<span class="lamp" data-state="${lampState}">${getLampLabel(lampState)}</span></span>`;
+  }).join('');
+  const filling = state.circuitRunning && state.truthRows?.current > 0;
+  const running = state.circuitRunning && !filling;
+  const generation = Math.min(filling ? state.truthRows.generation : state.board.generation, experiment.observeGeneration);
+  elements.circuitBarProgress.textContent = filling
+    ? `Row ${state.truthRows.current} of ${state.truthRows.rows.length}`
+    : running ? `${generation.toLocaleString()} / ${experiment.observeGeneration.toLocaleString()}` : '';
+  elements.runCircuitBar.disabled = state.circuitRunning;
 }
 
 function renderTruthTable() {
@@ -2374,7 +2453,7 @@ function renderTruthTable() {
     return `<td class="${output.high ? 'high' : 'low'}">${output.high ? 1 : 0}</td>`;
   }).join('')}</tr>`).join('');
   const caption = measured
-    ? (state.circuitRunning ? 'Running every combination…' : 'Measured from real probe cells.')
+    ? (state.circuitRunning ? 'Running every combination…' : 'Each row was run on the board.')
     : inputNames.length > 4
       ? `Run all measures every combination: ${truthTableEstimate().text}.`
       : 'Run all to measure every combination.';
@@ -2946,7 +3025,7 @@ function drawCircuitMarkers(cellSize) {
   ctx.textBaseline = 'middle';
 
   // Gate tile outlines, named above each tile (inside it when the tile sits
-  // at the board's top edge); a turned tile carries a ↻ mark.
+  // at the board's top edge); a tile drawn on its side says so.
   ctx.setLineDash([6, 4]);
   for (const tile of tiles) {
     ctx.strokeRect(Math.round(tile.x * cellSize) + 0.5, Math.round(tile.y * cellSize) + 0.5, Math.round(tile.width * cellSize), Math.round(tile.height * cellSize));
@@ -2955,7 +3034,7 @@ function drawCircuitMarkers(cellSize) {
   ctx.textAlign = 'left';
   for (const tile of tiles) {
     const name = GATE_CARDS[tile.gateId]?.name || String(tile.gateId).toUpperCase();
-    const turned = Number(tile.rotation) ? ' ↻' : '';
+    const turned = Number(tile.rotation) ? ' (turned)' : '';
     const top = tile.y * cellSize;
     ctx.fillText(name + turned, tile.x * cellSize + 6, top >= 16 ? top - 10 : top + 12);
   }
@@ -3197,6 +3276,7 @@ function setMode(mode) {
   if (mode === 'community' && state.playing) setPlaying(false);
   if (mode === 'community') renderCommunity();
   if (mode !== 'community') swapWorkspace(mode);
+  renderCircuitBar();
   if (mode === 'studio' && state.recoveryPending) {
     state.recoveryPending = false;
     showToast('Recovered unsaved work', { kind: 'info' });
@@ -3910,7 +3990,7 @@ function getVisibleMasterworks() {
 
 function renderPatternList() {
   const searching = Boolean(state.patternQuery.trim());
-  elements.patternTabs.hidden = searching;
+  elements.patternTabs.parentElement.hidden = searching;
   elements.patternTabs.innerHTML = '';
   for (const group of [...presetGroups, MASTERWORKS_GROUP]) {
     const tab = document.createElement('button');
@@ -3921,6 +4001,16 @@ function renderPatternList() {
     tab.textContent = group.title;
     elements.patternTabs.append(tab);
   }
+  // One scrolling row of tabs: keep the chosen one in view and fade the
+  // edge that has more tabs behind it.
+  const selected = elements.patternTabs.querySelector('[aria-selected="true"]');
+  if (selected && !searching) {
+    const row = elements.patternTabs;
+    const left = selected.offsetLeft - row.offsetLeft;
+    if (left < row.scrollLeft) row.scrollLeft = left - 8;
+    else if (left + selected.offsetWidth > row.scrollLeft + row.clientWidth) row.scrollLeft = left + selected.offsetWidth - row.clientWidth + 8;
+  }
+  updatePatternTabsOverflow();
 
   elements.patternList.innerHTML = '';
   const visible = getVisiblePresets();
@@ -3944,6 +4034,14 @@ function renderPatternList() {
   updatePresetSelection();
 }
 
+function updatePatternTabsOverflow() {
+  const row = elements.patternTabs;
+  const edges = [];
+  if (row.scrollLeft > 1) edges.push('start');
+  if (row.scrollLeft + row.clientWidth < row.scrollWidth - 1) edges.push('end');
+  row.dataset.overflow = edges.join(' ') || 'none';
+}
+
 // A masterwork card: the same card as a pattern, with the discoverer and year
 // as its meta line and the size in place of a thumbnail that would be
 // illegible. Reference-only works link to their source instead of loading.
@@ -3959,11 +4057,14 @@ function createMasterworkCard(work) {
   }
   const thumb = document.createElement('span');
   thumb.className = 'card-thumb';
-  const thumbnail = loadable && work.size.width <= THUMBNAIL_MAX_WIDTH && work.size.height <= THUMBNAIL_MAX_WIDTH
-    ? masterworkThumbnail(work)
-    : null;
+  // Loadable works show their cells (scaled down); one that is fetched on
+  // demand shows a play mark. Reference-only works get a dashed link box.
+  const thumbnail = loadable ? masterworkThumbnail(work) : null;
   if (thumbnail) thumb.append(thumbnail);
-  else thumb.innerHTML = `<svg class="icon" aria-hidden="true" style="width:22px;height:22px"><use href="#${loadable ? 'i-grid' : 'i-external'}" /></svg>`;
+  else {
+    thumb.classList.add(loadable ? 'card-thumb-load' : 'card-thumb-link');
+    thumb.innerHTML = `<svg class="icon" aria-hidden="true" style="width:22px;height:22px"><use href="#${loadable ? 'i-play' : 'i-external'}" /></svg>`;
+  }
   const size = work.size ? `${work.size.width.toLocaleString()} × ${work.size.height.toLocaleString()}` : '';
   const meta = [work.discoverer, work.year].filter(Boolean).join(' · ');
   const loading = state.masterworkLoading === work.id;
@@ -3977,7 +4078,7 @@ function createMasterworkCard(work) {
     + `<span class="card-meta">${escapeHtml(meta)}</span>`
     + `<span class="card-note">${escapeHtml(work.note)}</span>`
     + (loadable
-      ? `<span class="card-size mono">${loading ? 'Loading…' : size}</span>`
+      ? `<span class="card-size">${loading ? 'Loading…' : `<span class="mono">${size}</span> cells · <span class="card-load">Load</span>`}</span>`
       : `<span class="card-reason">${escapeHtml(work.reason || (size && `${size} cells.`) || '')}</span>`
         + `<a class="card-link" href="${escapeHtml(work.source?.url || '#')}" target="_blank" rel="noopener">Read about it<svg class="icon" aria-hidden="true"><use href="#i-external" /></svg></a>`);
   card.append(thumb, text);
@@ -4085,7 +4186,8 @@ function drawPatternThumbnail(thumbCanvas, coordinates) {
   preview.setTransform(ratio, 0, 0, ratio, 0, 0);
   const bounds = getPatternBounds(coordinates);
   const rawCell = Math.min(8, 56 / Math.max(1, bounds.width, bounds.height));
-  const cell = rawCell >= 2 ? Math.floor(rawCell) : Math.max(0.6, rawCell);
+  // Large patterns shrink below a pixel per cell so they still fit the box.
+  const cell = rawCell >= 2 ? Math.floor(rawCell) : rawCell;
   const width = bounds.width * cell;
   const height = bounds.height * cell;
   const offsetX = Math.floor((size - width) / 2);
@@ -4172,7 +4274,7 @@ function getLogicCards() {
       note: GATE_CARDS[experiment.id]?.note || experiment.description,
       spec: experiment.id === 'half-adder' ? { gates: ['half-adder'], inputs: {} } : { gates: [experiment.id], inputs: {} },
     })),
-    ...getBuildablePresets().map((preset) => ({ id: preset.id, name: preset.title, note: preset.description, spec: { preset: preset.id, inputs: { ...preset.spec.inputs } } })),
+    ...getBuildablePresets().map((preset) => ({ id: preset.id, name: preset.title, note: PRESET_NOTES[preset.id] || preset.description, spec: { preset: preset.id, inputs: { ...preset.spec.inputs } } })),
   ];
 }
 
@@ -4580,6 +4682,8 @@ function bindEvents() {
     state.activePresetGroup = tab.dataset.patternTab;
     renderPatternList();
   });
+  elements.patternTabs.addEventListener('scroll', updatePatternTabsOverflow, { passive: true });
+  window.addEventListener('resize', updatePatternTabsOverflow);
   elements.patternList.addEventListener('click', (event) => {
     if (event.target.closest('a')) return;
     const work = event.target.closest('button[data-masterwork-id]');
@@ -4611,6 +4715,7 @@ function bindEvents() {
     // Reopening the card that is already open keeps its switches.
     const spec = circuitCardId() === card.id ? state.circuitSpec : card.spec;
     openCircuit(spec);
+    elements.inspector.scrollTop = 0;
     closeSheets();
   });
 
@@ -4638,6 +4743,14 @@ function bindEvents() {
   elements.inspectorToggle.addEventListener('click', () => openInspector(elements.inspector.dataset.open !== 'true'));
   elements.inspectorClose.addEventListener('click', () => closeSheets());
   elements.gridSize.addEventListener('change', () => applyGridSizeChoice(elements.gridSize.value));
+  elements.gridApply.addEventListener('click', applyCustomGridSize);
+  elements.gridCustom.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') applyCustomGridSize();
+    if (event.key === 'Escape') {
+      elements.gridCustom.hidden = true;
+      syncDesignControls();
+    }
+  });
   elements.edges.addEventListener('change', () => applyEdgesChoice(elements.edges.value));
   elements.inputsList.addEventListener('change', (event) => {
     const input = event.target.closest('[data-input]');
@@ -4658,7 +4771,13 @@ function bindEvents() {
   });
   elements.inspector.addEventListener('scroll', positionChipMenu);
   window.addEventListener('resize', positionChipMenu);
-  elements.runCircuit.addEventListener('click', runCircuitExperiment);
+  // On a phone, Run closes the sheet so the board is visible during the run;
+  // the circuit bar keeps the lamps on screen.
+  elements.runCircuit.addEventListener('click', () => {
+    if (MOBILE_QUERY.matches) closeSheets();
+    runCircuitExperiment();
+  });
+  elements.runCircuitBar.addEventListener('click', runCircuitExperiment);
   elements.fillTruthTable.addEventListener('click', fillTruthTable);
   elements.versionHistory.addEventListener('click', (event) => {
     const button = event.target.closest('[data-restore-version-id]');

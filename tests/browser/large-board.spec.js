@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openMoreMenu, openPatterns, snapshot, watchErrors } from './helpers.js';
+import { openInspector, openMoreMenu, openPatterns, snapshot, watchErrors } from './helpers.js';
 
 // Boards up to 3000 cells wide must fit the view, render inside the frame
 // budget and pan cheaply on desktop and phone.
@@ -80,4 +80,41 @@ test('a 3000-wide board fits the view and renders within the frame budget', asyn
   const after = await snapshot(page);
   expect(Math.round(after.panX - before.panX)).toBe(120);
   expect(Math.round(after.panY - before.panY)).toBe(40);
+});
+
+test('Grid size → Custom… opens width and height fields that resize the board', async ({ page, isMobile }) => {
+  await page.goto('/studio');
+  await expect(page.locator('#project-header')).toBeVisible();
+  await openInspector(page, isMobile);
+  // The menu never repeats a preset's label for the custom choice.
+  const labels = await page.locator('#grid-size option:not([hidden])').allInnerTexts();
+  expect(new Set(labels).size).toBe(labels.length);
+  expect(labels).toContain('Custom…');
+  await expect(page.locator('#grid-custom')).toBeHidden();
+
+  await page.locator('#grid-size').selectOption('custom');
+  await expect(page.locator('#grid-custom')).toBeVisible();
+  await expect(page.locator('#grid-width')).toHaveValue('300');
+  await expect(page.locator('#grid-height')).toHaveValue('200');
+  if (isMobile) {
+    for (const selector of ['#grid-width', '#grid-height', '#grid-apply']) expect((await page.locator(selector).boundingBox()).height).toBeGreaterThanOrEqual(40);
+  }
+  // Out of range is refused with a reason; the board stays as it was.
+  await page.locator('#grid-width').fill('5000');
+  await page.locator('#grid-apply').click();
+  await expect(page.locator('#toast')).toHaveText('Width and height must each be between 40 and 3,000 cells.');
+  expect((await snapshot(page)).width).toBe(300);
+
+  await page.locator('#grid-width').fill('3000');
+  await page.locator('#grid-height').fill('2500');
+  await page.locator('#grid-apply').click();
+  await expect(page.locator('#toast')).toHaveText('Grid is now 3000 × 2500');
+  await expect(page.locator('#grid-custom')).toBeHidden();
+  const state = await snapshot(page);
+  expect([state.width, state.height]).toEqual([3000, 2500]);
+  await expect(page.locator('#grid-size option:checked')).toHaveText('3000 × 2500');
+  // Back to a preset.
+  await page.locator('#grid-size').selectOption('medium');
+  await expect.poll(async () => (await snapshot(page)).width).toBe(300);
+  await expect(page.locator('#grid-size option[value="current"]')).toBeHidden();
 });

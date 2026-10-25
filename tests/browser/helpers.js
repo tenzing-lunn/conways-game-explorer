@@ -141,7 +141,7 @@ export async function addGate(page, gate, outputId = 'out') {
 // finish before a "disabled" check would see it, so wait for the outcome).
 export async function runAll(page, { timeout = 240_000 } = {}) {
   await page.locator('#fill-truth-table').click();
-  await expect(page.locator('#truth-table caption')).toHaveText('Measured from real probe cells.', { timeout });
+  await expect(page.locator('#truth-table caption')).toHaveText('Each row was run on the board.', { timeout });
   await expect(page.locator('#fill-truth-table')).toBeEnabled();
 }
 

@@ -58,13 +58,40 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
   color: var(--muted);
 }
 
-/* Five groups do not fit the rail on one line; the last wraps under them. */
+/* Five groups in one scrolling row; the rule sits under the whole row and
+   a fade marks the edge with more tabs behind it. */
+.pattern-tabs-wrap {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+}
+
+.pattern-tabs-wrap[hidden] {
+  display: none;
+}
+
 .pattern-tabs {
   display: flex;
-  flex-wrap: wrap;
-  flex: 0 0 auto;
+  flex-wrap: nowrap;
   gap: 2px;
-  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.pattern-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.pattern-tabs[data-overflow="end"] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
+.pattern-tabs[data-overflow="start"] {
+  mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+}
+
+.pattern-tabs[data-overflow="start end"] {
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
 }
 
 .rail-panel .search-field {
@@ -72,6 +99,7 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
 }
 
 .pattern-tabs > button {
+  flex: 0 0 auto;
   height: 30px;
   padding: 0 8px;
   font-size: 13px;
@@ -167,8 +195,26 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
   line-height: 1.35;
 }
 
+/* The note says why the work matters: show all of it. */
 .card-masterwork .card-note {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
   color: var(--text);
+}
+
+.card-load {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.card-thumb-load {
+  color: var(--accent);
+}
+
+.card-thumb-link {
+  border-style: dashed;
+  background: transparent;
 }
 
 .card-size {
@@ -494,13 +540,13 @@ body[data-playing="true"] .icon-pause {
     background: rgba(0, 0, 0, 0.3);
   }
 
-  .pattern-tabs {
-    flex-wrap: nowrap;
-    overflow-x: auto;
+  .pattern-tabs-wrap {
     border-bottom: 0;
+  }
+
+  .pattern-tabs {
     gap: 6px;
     -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
   }
 
   .pattern-tabs > button {

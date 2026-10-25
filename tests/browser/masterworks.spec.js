@@ -46,6 +46,10 @@ test('the group lists every masterwork with its name, discoverer and year; refer
   await openMasterworks(page, isMobile);
   const cards = page.locator('#pattern-list [data-masterwork-id]');
   await expect(cards).toHaveCount(works.length);
+  // Every note is shown in full: nothing is clamped away.
+  const clipped = await page.locator('#pattern-list .card-masterwork .card-note')
+    .evaluateAll((nodes) => nodes.filter((node) => node.scrollHeight > node.clientHeight + 1).map((node) => node.textContent));
+  expect(clipped).toEqual([]);
   for (const work of works) {
     const card = page.locator(`#pattern-list [data-masterwork-id="${work.id}"]`);
     await expect(card).toContainText(work.name);
@@ -53,9 +57,11 @@ test('the group lists every masterwork with its name, discoverer and year; refer
     if (work.year) await expect(card).toContainText(String(work.year));
     if (work.loadable) {
       await expect(card).toHaveJSProperty('tagName', 'BUTTON');
-      await expect(card).toContainText(`${work.size.width.toLocaleString('en-US')} × ${work.size.height.toLocaleString('en-US')}`);
+      await expect(card.locator('.card-size')).toHaveText(`${work.size.width.toLocaleString('en-US')} × ${work.size.height.toLocaleString('en-US')} cells · Load`);
+      await expect(card.locator('.card-thumb-link')).toHaveCount(0);
     } else {
       await expect(card).toHaveClass(/card-reference/);
+      await expect(card.locator('.card-thumb-link')).toHaveCount(1);
       const link = card.locator('a.card-link');
       await expect(link).toHaveText(/Read about it/);
       await expect(link).toHaveAttribute('href', work.url);

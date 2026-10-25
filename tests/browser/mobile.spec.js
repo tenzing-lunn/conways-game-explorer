@@ -117,3 +117,40 @@ test('theme and account move into the top ⋯ menu', async ({ page }) => {
   await page.keyboard.press('Escape');
   await expect(page.locator('#top-menu')).toHaveAttribute('data-open', 'false');
 });
+
+test('top-bar tabs, the brand and the rail kind tabs are 40px touch targets', async ({ page, isMobile }) => {
+  await page.goto('/studio');
+  await expect(page.locator('#project-header')).toBeVisible();
+  for (const selector of ['#brand', '#mode-playground', '#mode-studio', '#mode-community']) {
+    const box = await page.locator(selector).boundingBox();
+    expect(Math.min(box.width, box.height), selector).toBeGreaterThanOrEqual(40);
+  }
+  await openPatterns(page, isMobile);
+  for (const tab of await page.locator('[data-rail-tab]').all()) {
+    const box = await tab.boundingBox();
+    expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(40);
+  }
+  expect(await overflow(page)).toBe(false);
+});
+
+test('with a circuit open, a bar above the controls shows the lamps and runs it while the board stays visible', async ({ page, isMobile }) => {
+  await page.goto('/studio');
+  await expect(page.locator('#project-header')).toBeVisible();
+  await expect(page.locator('#circuit-bar')).toBeHidden();
+  await pickGate(page, isMobile, 'and');
+  await expect(page.locator('#circuit-bar')).toBeVisible();
+  await expect(page.locator('#circuit-bar [data-bar-output="out"]')).toContainText('OUT');
+  const run = await page.locator('#run-circuit-bar').boundingBox();
+  expect(run.height).toBeGreaterThanOrEqual(40);
+  // Run from the sheet closes the sheet, so the board shows the run.
+  await openInspector(page, isMobile);
+  for (const name of ['a', 'b']) await page.locator(`#inputs-list .switch-row:has([data-input="${name}"]) > span`).tap();
+  await page.locator('#run-circuit').click();
+  await expect(page.locator('#inspector')).toHaveAttribute('data-open', 'false');
+  await expect(page.locator('#circuit-bar [data-bar-output="out"] .lamp')).toHaveAttribute('data-state', 'high', { timeout: 60_000 });
+  await expect(page.locator('#run-circuit-bar')).toBeEnabled();
+  // The bar's own Run works too.
+  await page.locator('#run-circuit-bar').click();
+  await expect(page.locator('#circuit-bar [data-bar-output="out"] .lamp')).toHaveAttribute('data-state', 'high', { timeout: 60_000 });
+  expect(await overflow(page)).toBe(false);
+});

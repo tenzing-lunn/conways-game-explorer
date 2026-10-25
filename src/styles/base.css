@@ -759,6 +759,11 @@ kbd {
     bottom: calc(84px + env(safe-area-inset-bottom));
   }
 
+  /* Keep the toast clear of the circuit bar above the bottom controls. */
+  body[data-mode="studio"]:has(#circuit-bar:not([hidden])) .toast {
+    bottom: calc(136px + env(safe-area-inset-bottom));
+  }
+
   /* An open sheet covers the lower screen; keep the toast above it. */
   body:has(#rail[data-open="true"]) .toast {
     bottom: calc(min(72vh, 620px) + 12px);
@@ -774,6 +779,10 @@ kbd {
   .kind-tabs > button,
   .menu > button {
     height: 40px;
+  }
+
+  .kind-tabs > button {
+    min-width: 48px;
   }
 
   .chip-row > button {
@@ -831,9 +840,15 @@ kbd {
   }
 
   .mode-tab {
-    padding: 0 8px;
-    height: 36px;
+    padding: 0 7px;
+    height: 40px;
     font-size: 14px;
+  }
+
+  .brand {
+    justify-content: center;
+    min-width: 40px;
+    min-height: 40px;
   }
 
   #top-menu-toggle {

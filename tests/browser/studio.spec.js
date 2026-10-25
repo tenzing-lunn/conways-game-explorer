@@ -201,7 +201,7 @@ test('truth table "Run all" measures all four AND rows and reports its progress'
   await expect(page.locator('#truth-table caption')).toHaveText('Running every combination…');
   await expect(page.locator('#fill-truth-table')).toBeEnabled({ timeout: 150_000 });
   expect(await truthRows(page)).toEqual([['0', '0', '0'], ['0', '1', '0'], ['1', '0', '0'], ['1', '1', '1']]);
-  await expect(page.locator('#truth-table caption')).toHaveText('Measured from real probe cells.');
+  await expect(page.locator('#truth-table caption')).toHaveText('Each row was run on the board.');
   await expect(page.locator('#toast')).toHaveText('Truth table complete');
   // The authored gate is back on the board and ready to run again.
   await expect(page.locator('#generation')).toHaveText('0');
