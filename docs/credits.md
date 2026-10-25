@@ -44,8 +44,9 @@ Loadable patterns and their discoverers:
 - Breeder 1 — Bill Gosper, 1971 — <https://conwaylife.com/wiki/Breeder_1>
 - Puffer 1 — Bill Gosper, 1971 — <https://conwaylife.com/wiki/Puffer_1>
 - 2-engine Cordership — praosylen, 2017 — <https://conwaylife.com/wiki/2-engine_Cordership>
+- OTCA metapixel — Brice Due, 2006 — <https://conwaylife.com/wiki/OTCA_metapixel>
+  (cell data in `src/masterworks-data/otca-metapixel.js`, loaded on demand)
 
-Reference-only entries (linked, no cell data shipped): OTCA metapixel (Brice
-Due, 2006), Gemini (Andrew J. Wade, 2010), 0E0P metacell (Adam P. Goucher,
-2018), Waterbear (Brett Berger and Ivan Fomichev, 2014) and LifeWiki's Pattern
-of the Year page.
+Reference-only entries (linked, no cell data shipped): Gemini (Andrew J. Wade,
+2010), 0E0P metacell (Adam P. Goucher, 2018), Waterbear (Brett Berger and Ivan
+Fomichev, 2014) and LifeWiki's Pattern of the Year page.

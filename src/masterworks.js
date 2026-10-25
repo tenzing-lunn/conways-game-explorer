@@ -1,11 +1,18 @@
 import { getPatternBounds, parseRle } from './patterns.js';
 
 // Famous large-scale Life discoveries with attribution. Cell data comes from
-// LifeWiki's pattern archive (GFDL 1.2+, attribution by link back) and is
-// stored as headerless RLE bodies for parseRle(); each body was normalised
-// through encodeRle() from the archived file. Reference-only entries are too
-// large to run here, or exceed the RLE import limit, and carry a link instead.
-// Licence evidence, source captures and benchmarks: docs/masterworks-provenance.md
+// LifeWiki's pattern archive (GFDL 1.2+, attribution by link back); each body
+// was normalised through encodeRle() from the archived file. Licence evidence,
+// source captures and benchmarks: docs/masterworks-provenance.md
+//
+// A loadable entry carries its cells in one of two ways:
+//   rle        inline headerless RLE body for parseRle() (small patterns);
+//              decodeMasterwork(id) reads it synchronously.
+//   rleModule  path, relative to this file, of an ES module whose default
+//              export is the headerless RLE body (large patterns such as the
+//              OTCA metapixel); loadMasterwork(id) imports it on demand so the
+//              Library does not pay for it until the pattern is opened.
+// Reference-only entries have neither and carry a plain-English reason.
 
 export const masterworks = [
   {
@@ -247,11 +254,12 @@ export const masterworks = [
     discoverer: 'Brice Due',
     year: '2006',
     source: { title: 'OTCA metapixel - LifeWiki', url: 'https://conwaylife.com/wiki/OTCA_metapixel' },
-    license: 'reference-only',
-    loadable: false,
+    license: 'gfdl-1.2',
+    loadable: true,
     size: { width: 2058, height: 2058 },
-    board: null,
-    reason: 'Its 2,058 × 2,058 bounding box is wider than the 2,048 cells this lab can import in one pattern.',
+    board: { width: 2400, height: 2400 },
+    population: 64691,
+    rleModule: './masterworks-data/otca-metapixel.js',
   },
   {
     id: 'gemini',
@@ -311,11 +319,34 @@ export function getMasterwork(id) {
   return masterworks.find((entry) => entry.id === id) ?? null;
 }
 
-export function decodeMasterwork(id) {
+function requireLoadable(id) {
   const entry = getMasterwork(id);
   if (!entry) throw new Error(`Unknown masterwork: ${id}`);
   if (!entry.loadable) throw new Error(`${entry.name} is reference-only. ${entry.reason}`);
-  const { coordinates } = parseRle(`x = ${entry.size.width}, y = ${entry.size.height}, rule = B3/S23\n${entry.rle}`);
+  return entry;
+}
+
+function decodeBody(entry, body) {
+  const { coordinates } = parseRle(`x = ${entry.size.width}, y = ${entry.size.height}, rule = B3/S23\n${body}`);
   const bounds = getPatternBounds(coordinates);
   return { coordinates, size: { width: bounds.width, height: bounds.height } };
+}
+
+// Synchronous; inline entries only.
+export function decodeMasterwork(id) {
+  const entry = requireLoadable(id);
+  if (entry.rleModule) {
+    throw new Error(`${entry.name} is loaded on demand; use loadMasterwork('${id}') instead.`);
+  }
+  return decodeBody(entry, entry.rle);
+}
+
+// Works for every loadable entry; imports rleModule-backed cell data on demand.
+export async function loadMasterwork(id) {
+  const entry = requireLoadable(id);
+  if (entry.rleModule) {
+    const { default: body } = await import(entry.rleModule);
+    return decodeBody(entry, body);
+  }
+  return decodeBody(entry, entry.rle);
 }

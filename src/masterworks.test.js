@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { masterworks, getMasterwork, decodeMasterwork } from './masterworks.js';
+import { performance } from 'node:perf_hooks';
+import { masterworks, getMasterwork, decodeMasterwork, loadMasterwork } from './masterworks.js';
 import { parseRle, getPatternBounds, RLE_LIMITS } from './patterns.js';
 import { createBoard, placePattern, createLifeStepper } from './life.js';
 
@@ -8,6 +9,11 @@ const BOARD_CEILING = 3000;
 const MARGIN = 40;
 const loadable = masterworks.filter((entry) => entry.loadable);
 const referenceOnly = masterworks.filter((entry) => !entry.loadable);
+
+// This test file sits beside masterworks.js, so its relative module paths resolve the same way.
+async function bodyOf(entry) {
+  return entry.rleModule ? (await import(entry.rleModule)).default : entry.rle;
+}
 
 function run(entry, generations, { wrapping = false } = {}) {
   const { coordinates } = decodeMasterwork(entry.id);
@@ -56,12 +62,13 @@ test('every entry carries attribution, a source page, a licence and a plain note
   }
 });
 
-test('loadable entries parse within RLE limits and match their declared size', () => {
+test('loadable entries parse within RLE limits and match their declared size', async () => {
   for (const entry of loadable) {
     assert.notEqual(entry.license, 'reference-only', entry.id);
-    assert.equal(typeof entry.rle, 'string', `${entry.id}.rle`);
+    const sources = (typeof entry.rle === 'string' ? 1 : 0) + (typeof entry.rleModule === 'string' ? 1 : 0);
+    assert.equal(sources, 1, `${entry.id} must have exactly one of rle / rleModule`);
     assert.ok(entry.size.width <= RLE_LIMITS.dimensionMax && entry.size.height <= RLE_LIMITS.dimensionMax, `${entry.id} size`);
-    const text = `x = ${entry.size.width}, y = ${entry.size.height}, rule = B3/S23\n${entry.rle}`;
+    const text = `x = ${entry.size.width}, y = ${entry.size.height}, rule = B3/S23\n${await bodyOf(entry)}`;
     assert.ok(new TextEncoder().encode(text).byteLength <= RLE_LIMITS.textBytesMax, `${entry.id} bytes`);
     const parsed = parseRle(text);
     assert.ok(parsed.coordinates.length <= RLE_LIMITS.coordinateCollectionMax, `${entry.id} cells`);
@@ -85,6 +92,7 @@ test('reference-only entries explain why and carry no cell data', () => {
     assert.equal(typeof entry.reason, 'string', `${entry.id}.reason`);
     assert.ok(entry.reason.trim(), `${entry.id}.reason is empty`);
     assert.equal(entry.rle, undefined, `${entry.id}.rle`);
+    assert.equal(entry.rleModule, undefined, `${entry.id}.rleModule`);
     assert.equal(entry.board, null, `${entry.id}.board`);
   }
   assert.ok(referenceOnly.some((entry) => entry.id === 'gemini'));
@@ -92,7 +100,7 @@ test('reference-only entries explain why and carry no cell data', () => {
   assert.ok(referenceOnly.some((entry) => entry.id === 'pattern-of-the-year'));
 });
 
-test('getMasterwork and decodeMasterwork look entries up by id', () => {
+test('getMasterwork and decodeMasterwork look inline entries up by id', () => {
   assert.equal(getMasterwork('loafer').name, 'Loafer');
   assert.equal(getMasterwork('nope'), null);
   const decoded = decodeMasterwork('loafer');
@@ -100,6 +108,27 @@ test('getMasterwork and decodeMasterwork look entries up by id', () => {
   assert.deepEqual(decoded.size, { width: 9, height: 9 });
   assert.throws(() => decodeMasterwork('nope'), /Unknown masterwork/);
   assert.throws(() => decodeMasterwork('gemini'), /reference-only/);
+  assert.throws(() => decodeMasterwork('otca-metapixel'), /loadMasterwork\('otca-metapixel'\)/);
+});
+
+test('loadMasterwork decodes inline and on-demand entries and rejects the rest', async () => {
+  const loafer = await loadMasterwork('loafer');
+  assert.equal(loafer.coordinates.length, 20);
+  assert.deepEqual(loafer.size, { width: 9, height: 9 });
+
+  const otcaEntry = getMasterwork('otca-metapixel');
+  assert.equal(otcaEntry.loadable, true);
+  assert.equal(otcaEntry.license, 'gfdl-1.2');
+  assert.equal(otcaEntry.rleModule, './masterworks-data/otca-metapixel.js');
+  const started = performance.now();
+  const otca = await loadMasterwork('otca-metapixel');
+  const elapsed = performance.now() - started;
+  assert.equal(otca.coordinates.length, 64691);
+  assert.deepEqual(otca.size, { width: 2058, height: 2058 });
+  assert.ok(elapsed < 3000, `OTCA load + decode took ${elapsed.toFixed(0)} ms`);
+
+  await assert.rejects(loadMasterwork('nope'), /Unknown masterwork/);
+  await assert.rejects(loadMasterwork('gemini'), /reference-only/);
 });
 
 test('spaceships reappear translated after one period', () => {

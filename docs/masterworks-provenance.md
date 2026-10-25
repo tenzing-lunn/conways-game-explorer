@@ -2,7 +2,9 @@
 
 Evidence for the licence, source and attribution of every entry in
 `src/masterworks.js`, plus the engine measurements that set the recommended
-boards. Research date: 2026-10-24.
+boards. Research date: 2026-10-24. Later the same day the OTCA metapixel moved
+from reference-only to shipped after `RLE_LIMITS.dimensionMax` in
+`src/patterns.js` rose from 2048 to 3000 (commit 30cd7a0 on `redesign/ui`).
 
 ## 1. Licence evidence
 
@@ -115,6 +117,14 @@ the credits do not rely on that argument but it reduces the residual risk.
 Patterns that could not be shipped are `license: 'reference-only'` with no cell
 data and a `reason` that names the limit involved.
 
+Small bodies are inline (`rle`). The OTCA metapixel's body (152,549
+characters) lives in its own ES module, `src/masterworks-data/otca-metapixel.js`
+(`export default '<headerless RLE body>'`), referenced from the entry as
+`rleModule: './masterworks-data/otca-metapixel.js'` and imported on demand by
+`loadMasterwork(id)`, so the Library does not download it until the pattern is
+opened. The module's header comment repeats the licence, capture URL and
+capture date.
+
 ## 2. Entries
 
 Facts (discoverer, year, bounding box, population) were read from Internet
@@ -132,6 +142,7 @@ Archive captures of the LifeWiki articles listed in column "Article capture".
 | `breeder-1` | Breeder 1 | Bill Gosper, 1971 | [breeder1.rle, 2024-11-20](https://web.archive.org/web/20241120000004id_/https://conwaylife.com/patterns/breeder1.rle) | `#N Breeder 1` / `#O Bill Gosper` / `#C The first pattern to be found that exhibits quadratic growth. Found in the early 1970s.` | 749×338 / 749×338 | 4,060 | none | 2400×1000 |
 | `puffer-1` | Puffer 1 | Bill Gosper, 1971 | [puffer1.rle, 2024-11-19](https://web.archive.org/web/20241119235849id_/https://conwaylife.com/patterns/puffer1.rle) | `#N Puffer 1` / `#O Bill Gosper` / `#C An orthogonal, period-128 puffer and the first puffer to be discovered` | 27×7 / 7×27 | 44 | 90° clockwise | 800×240 |
 | `two-engine-cordership` | 2-engine Cordership | praosylen, 2017 | [2enginecordership.rle, 2025-04-22](https://web.archive.org/web/20250422081447id_/https://conwaylife.com/patterns/2enginecordership.rle) | `#N 2-engine Cordership` / `#O Aidan F. Pierce` / `#C The smallest known Cordership.` | 41×49 / 41×49 | 100 | none | 480×320 |
+| `otca-metapixel` | OTCA metapixel | Brice Due, 2006 | [otcametapixel.rle, 2025-07-18](https://web.archive.org/web/20250718225406id_/https://conwaylife.com/patterns/otcametapixel.rle) | `#N OTCA metapixel` / `#O Brice Due` / `#C A unit cell that is capable of emulating any Life-like cellular automaton. Constructed in 2006.` | 2058×2058 / 2058×2058 | 64,691 | none; body in `src/masterworks-data/otca-metapixel.js` | 2400×2400 |
 
 Notes:
 
@@ -156,6 +167,13 @@ Notes:
 - Sir Robin: the article's infobox credits Adam P. Goucher and Tomas Rokicki
   (Goucher completed the ship from a partial by Rokicki). The entry credits
   both.
+- OTCA metapixel: the article gives bounding box 2058×2058 and "cell size"
+  2048×2048; the archived RLE declares `x = 2058, y = 2058` (`rule = b3/s23`)
+  and its true bounding box is 2058×2058 (copies tile every 2048 cells and
+  overlap by 5). It was reference-only while `RLE_LIMITS.dimensionMax` was
+  2048; with the limit at 3000 `parseRle` accepts it and it ships unchanged.
+  `loadMasterwork('otca-metapixel')` (dynamic import plus decode) took 24 ms
+  in Node for 64,691 cells.
 - Article captures used for facts: [Simkin glider gun](https://web.archive.org/web/20260628223231/https://conwaylife.com/wiki/Simkin_glider_gun),
   [Snark](https://web.archive.org/web/20260927215031/https://conwaylife.com/wiki/Snark),
   [Sir Robin](https://web.archive.org/web/20261011065557/https://conwaylife.com/wiki/Sir_Robin),
@@ -163,13 +181,13 @@ Notes:
   [Loafer](https://web.archive.org/web/20260930212916/https://conwaylife.com/wiki/Loafer),
   [Breeder 1](https://web.archive.org/web/20260902181614/https://conwaylife.com/wiki/Breeder_1),
   [Puffer 1](https://web.archive.org/web/20260829052825/https://conwaylife.com/wiki/Puffer_1),
-  [2-engine Cordership](https://web.archive.org/web/20261011061540/https://conwaylife.com/wiki/2-engine_Cordership).
+  [2-engine Cordership](https://web.archive.org/web/20261011061540/https://conwaylife.com/wiki/2-engine_Cordership),
+  [OTCA metapixel](https://web.archive.org/web/20260923052505/https://conwaylife.com/wiki/OTCA_metapixel).
 
 ### 2.2 Reference-only
 
 | id | Name | Discoverer, year | Article capture | Size (article) | Why not loadable |
 | --- | --- | --- | --- | --- | --- |
-| `otca-metapixel` | OTCA metapixel | Brice Due, 2006 | [OTCA metapixel](https://web.archive.org/web/20260923052505/https://conwaylife.com/wiki/OTCA_metapixel) | bounding box 2058×2058, "cell size" 2048×2048, 64,691 cells | The archived RLE ([otcametapixel.rle, 2025-07-18](https://web.archive.org/web/20250718225406id_/https://conwaylife.com/patterns/otcametapixel.rle)) declares `x = 2058, y = 2058` and its true bounding box is 2058×2058 (the 2048 figure is the tiling period; copies overlap by 5 cells). `RLE_LIMITS.dimensionMax` in `src/patterns.js` is 2048, so `parseRle` rejects it. The engine itself copes (see §3). |
 | `gemini` | Gemini | Andrew J. Wade, 2010 | [Gemini](https://web.archive.org/web/20260913053552/https://conwaylife.com/wiki/Gemini) | 4,217,807 × 4,220,191; 846,278 cells | Far above the 3000-cell board ceiling and the 200,000-cell coordinate limit. |
 | `0e0p-metacell` | 0E0P metacell | Adam P. Goucher, 2018 | [0E0P metacell](https://web.archive.org/web/20261014163730/https://conwaylife.com/wiki/0E0P_metacell) | 261,841 × 261,841; ~18,650,000 cells | Far above both limits. |
 | `waterbear` | Waterbear | Brett Berger and Ivan Fomichev, 2014 | [Waterbear](https://web.archive.org/web/20260927080118/https://conwaylife.com/wiki/Waterbear) | 13,295 × 28,010; 197,896 cells | Above the 3000-cell board ceiling; its RLE is also not in the Internet Archive. Pattern of the Year 2014. |
@@ -184,10 +202,12 @@ knightship (2014, 450,801 × 461,227, 1,049,395 cells).
 Apple M2 (8 logical CPUs), macOS arm64, Node v22.20.0. Each pattern was placed
 centred on its recommended board with bounded edges, `createLifeStepper` ran
 one warm-up generation, then 200 generations were timed in a single pass with
-nothing else running. The OTCA metapixel was decoded with a tolerant scanner
-(not `parseRle`, which rejects its header) purely to measure it; a second pass
-of its rows is shown to indicate variance. An earlier pass that overlapped with
-`npm test` on the same machine gave 45–55 ms for OTCA and is discarded.
+nothing else running. Every pattern, OTCA included, was decoded through
+`loadMasterwork()`; OTCA's dynamic import plus `parseRle` took 24 ms for
+64,691 cells. OTCA's 2400 × 2400 row is its shipped board; the 3000 × 3000
+rows show the board ceiling. An earlier pass that overlapped with `npm test`
+on the same machine gave 45–55 ms for OTCA and is discarded; an earlier
+uncontended pass on a 2098 × 2098 board gave 15.0–15.3 ms.
 
 | Pattern | Board | Edges | Population (start → after 200) | ms/generation |
 | --- | --- | --- | --- | ---: |
@@ -196,17 +216,17 @@ of its rows is shown to indicate variance. An earlier pass that overlapped with
 | Sir Robin | 720 × 400 | bounded | 282 → 303 | 0.10 |
 | Copperhead | 300 × 200 | bounded | 28 → 30 | 0.05 |
 | Loafer | 300 × 200 | bounded | 20 → 23 | 0.06 |
-| Breeder 1 | 2400 × 1000 | bounded | 4,060 → 3,968 | 1.02 |
-| Puffer 1 | 800 × 240 | bounded | 44 → 170 | 0.08 |
+| Breeder 1 | 2400 × 1000 | bounded | 4,060 → 3,968 | 1.07 |
+| Puffer 1 | 800 × 240 | bounded | 44 → 170 | 0.09 |
 | 2-engine Cordership | 480 × 320 | bounded | 100 → 116 | 0.09 |
-| OTCA metapixel (reference-only) | 2098 × 2098 | bounded | 64,691 → 54,889 | 15.26 / 15.01 |
-| OTCA metapixel (reference-only) | 3000 × 3000 | bounded | 64,691 → 54,889 | 15.66 / 18.57 |
-| OTCA metapixel (reference-only) | 3000 × 3000 | wrapped | 64,691 → 54,889 | 15.55 / 16.76 |
+| OTCA metapixel | 2400 × 2400 | bounded | 64,691 → 54,889 | 17.11 |
+| OTCA metapixel | 3000 × 3000 | bounded | 64,691 → 54,889 | 16.74 |
+| OTCA metapixel | 3000 × 3000 | wrapped | 64,691 → 54,889 | 16.82 |
 
-Reading: every loadable pattern costs about 1 ms/generation or less. The OTCA
-metapixel runs at 15–19 ms/generation on a 3000 × 3000 board, under the 40 ms
-threshold set for shipping it, so the engine is not the obstacle; only the
-2048-cell RLE header limit is. No change to `src/life.js` was needed.
+Reading: every inline pattern costs about 1 ms/generation or less. The OTCA
+metapixel runs at about 17 ms/generation on its 2400 × 2400 board and on the
+3000 × 3000 ceiling, under the 40 ms threshold set for shipping it, so it
+ships as loadable. No change to `src/life.js` was needed.
 
 Runway on the recommended boards (pattern centred, bounded edges): Breeder 1
 reaches the right edge after about 1,650 generations and its glider wake
