@@ -309,3 +309,35 @@ Command: `node scripts/verify-circuits.mjs` (full run; every chain up to 4 gates
 | chain of 4 | 29 | 564 | 0 | 704 |
 
 Four-gate chains verified so far: and>and>and>and, or>and>and>and, not>and>and>and, and>or>and>and, or>or>and>and, not>or>and>and, and>not>and>and, or>not>and>and, not>not>and>and, and>and>or>and, or>and>or>and, not>and>or>and, and>or>or>and, or>or>or>and, not>or>or>and, and>not>or>and, or>not>or>and, not>not>or>and, and>and>not>and, or>and>not>and, not>and>not>and, and>or>not>and, or>or>not>and, not>or>not>and, and>not>not>and, or>not>not>and, not>not>not>and, and>and>and>or, or>and>and>or.
+
+
+### Full adder follow-up (2026-10-25, 00:00-00:30 ET) — not buildable yet
+
+Attempted the compact construction (half-adder tiles as XOR blocks). Findings:
+
+- A direct cascade HA2 east of HA1 at the same y is impossible without turn
+  tiles: HA2's lower input lane (rows y+221..224) is exactly HA1's carry lane,
+  and the c train's stamp position (HA2.x - 35 - tA/2 - 30k with tA = HA sum
+  latency + 2*gap) does not depend on the gap, so c would always have to start
+  about 575 cells west of HA1, inside its rows.
+- Geometry that needs no new tiles: feed HA1's sum into HA2's LOWER lane by
+  placing HA2 at (X + 300 + G, Y - 150); c then arrives along HA2's upper lane
+  (rows Y-80..Y-76), which runs above HA1 and is free; terminate HA1's carry at
+  (X+300, Y+150) as the legacy experiment does and HA2's carry at
+  (HA2.x+300, HA2.y+150); SUM probe at (HA2.x+300, Y-75). CARRY comes from the
+  already verified 4-gate tree (a OR b) AND ((a AND b) OR c) as the second
+  output. Both inputs of HA2 then carry the same delay D = L_sum + 2G, which
+  must be a multiple of 60.
+- Blocking measurement: with the inherited stamps (both inputs at x-5-30k, lanes
+  70 and 220) the half-adder's sum lane at generation 2400 holds 19 packets for
+  a=1,b=0, 23 for a=0,b=1 and 11 for a=b=1 (should be none), with 18/27/135
+  stray cells east of the tile, and matches no delayed standard train exactly.
+  This is the signature the OR showed before its B lane was re-phased (+3), so
+  the half-adder's second lane needs an offset sweep against 40-packet trains
+  (tile intact, nothing escaping, exact N-packet output) and the sum latency
+  and phase must be established slot-exactly before HA2 can be fed by HA1.
+  The legacy lone half-adder stays correct because its probe reads at 1200,
+  where the extra packets are not in the window.
+- Estimated remaining work: one evening (sweep + latency + cascade + 8-row
+  verification + preset wiring). Until then `validateCircuit({ preset:
+  'full-adder' })` keeps rejecting the preset with the gate-cap reason.
