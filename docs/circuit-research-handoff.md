@@ -194,3 +194,118 @@ observe 600 + upstream latency as before); chains of 1-3 keep the legacy code.
 
 See the table appended below by `scripts/verify-circuits.mjs` (date, counts,
 timing).
+
+#### Trees and random trees (2026-10-24 23:50 ET)
+
+Command: `node scripts/verify-circuits.mjs --only=trees,random`. Each row is simulated to the observation generation and read again 60, 120 and 180 generations later.
+
+54 circuits simulated, 340 rows, 0 mismatches, 8 random trees rejected by validateCircuit, 322s total.
+
+| circuit | rows | mismatches | seconds | note |
+| --- | --- | --- | --- | --- |
+| tree OUT = (A AND B) AND (C AND D) | 16 | 0 | 14.2 | 1174x1131, observe 1620, 3 tiles |
+| tree OUT = (A AND B) AND (A AND B) | 4 | 0 | 3.6 | 1174x1131, observe 1620, 3 tiles |
+| tree OUT = (A AND B) AND (B AND C) | 8 | 0 | 7.2 | 1174x1131, observe 1620, 3 tiles |
+| tree OUT = (A AND B) AND (C OR D) | 16 | 0 | 16.8 | 1234x1131, observe 1740, 3 tiles |
+| tree OUT = (A AND B) AND (A OR B) | 4 | 0 | 4.2 | 1234x1131, observe 1740, 3 tiles |
+| tree OUT = (A AND B) AND (B OR C) | 8 | 0 | 8.4 | 1234x1131, observe 1740, 3 tiles |
+| tree OUT = (A AND B) AND (NOT C) | 8 | 0 | 4.2 | 814x831, observe 1020, 3 tiles |
+| tree OUT = (A AND B) AND (NOT A) | 4 | 0 | 2.1 | 814x831, observe 1020, 3 tiles |
+| tree OUT = (A AND B) AND (NOT B) | 4 | 0 | 2.1 | 814x831, observe 1020, 3 tiles |
+| tree OUT = (A OR B) AND (C AND D) | 16 | 0 | 16.8 | 1234x1131, observe 1740, 3 tiles |
+| tree OUT = (A OR B) AND (A AND B) | 4 | 0 | 4.2 | 1234x1131, observe 1740, 3 tiles |
+| tree OUT = (A OR B) AND (B AND C) | 8 | 0 | 8.4 | 1234x1131, observe 1740, 3 tiles |
+| tree OUT = (A OR B) AND (C OR D) | 16 | 0 | 20.4 | 1234x1191, observe 1860, 3 tiles |
+| tree OUT = (A OR B) AND (A OR B) | 4 | 0 | 5.1 | 1234x1191, observe 1860, 3 tiles |
+| tree OUT = (A OR B) AND (B OR C) | 8 | 0 | 10.2 | 1234x1191, observe 1860, 3 tiles |
+| tree OUT = (A OR B) AND (NOT C) | 8 | 0 | 4.6 | 844x801, observe 1080, 3 tiles |
+| tree OUT = (A OR B) AND (NOT A) | 4 | 0 | 2.3 | 844x801, observe 1080, 3 tiles |
+| tree OUT = (A OR B) AND (NOT B) | 4 | 0 | 2.3 | 844x801, observe 1080, 3 tiles |
+| tree OUT = (NOT A) AND (C AND D) | 8 | 0 | 4.1 | 814x831, observe 1020, 3 tiles |
+| tree OUT = (NOT A) AND (A AND B) | 4 | 0 | 2.1 | 814x831, observe 1020, 3 tiles |
+| tree OUT = (NOT A) AND (B AND C) | 8 | 0 | 4.1 | 814x831, observe 1020, 3 tiles |
+| tree OUT = (NOT A) AND (C OR D) | 8 | 0 | 4.6 | 844x801, observe 1080, 3 tiles |
+| tree OUT = (NOT A) AND (A OR B) | 4 | 0 | 2.3 | 844x801, observe 1080, 3 tiles |
+| tree OUT = (NOT A) AND (B OR C) | 8 | 0 | 4.6 | 844x801, observe 1080, 3 tiles |
+| tree OUT = (NOT A) AND (NOT C) | 0 | 0 | 0.0 | rejected: An AND gate can take at most one input that runs through a NOT gate. |
+| tree OUT = (NOT A) AND (NOT A) | 0 | 0 | 0.0 | rejected: An AND gate can take at most one input that runs through a NOT gate. |
+| tree OUT = (NOT A) AND (NOT B) | 0 | 0 | 0.0 | rejected: An AND gate can take at most one input that runs through a NOT gate. |
+| tree OUT = (A AND B) OR (C AND D) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A AND B) OR (A AND B) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A AND B) OR (B AND C) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A AND B) OR (C OR D) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A AND B) OR (A OR B) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A AND B) OR (B OR C) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A AND B) OR (NOT C) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A AND B) OR (NOT A) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A AND B) OR (NOT B) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A OR B) OR (C AND D) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A OR B) OR (A AND B) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A OR B) OR (B AND C) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A OR B) OR (C OR D) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A OR B) OR (A OR B) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A OR B) OR (B OR C) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A OR B) OR (NOT C) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A OR B) OR (NOT A) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (A OR B) OR (NOT B) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (NOT A) OR (C AND D) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (NOT A) OR (A AND B) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (NOT A) OR (B AND C) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (NOT A) OR (C OR D) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (NOT A) OR (A OR B) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (NOT A) OR (B OR C) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (NOT A) OR (NOT C) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (NOT A) OR (NOT A) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| tree OUT = (NOT A) OR (NOT B) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| random OUT = B OR (NOT B) | 2 | 0 | 0.9 | 814x890, observe 1020, 2 tiles |
+| random OUT = NOT (B AND (NOT E)) | 4 | 0 | 2.5 | 964x827, observe 1320, 3 tiles |
+| random OUT = ((NOT A) OR A) AND (NOT ((A OR (E AND B)) OR C)) | 0 | 0 | 0.0 | rejected: An AND gate can take at most one input that runs through a NOT gate. |
+| random OUT = (C OR D) OR D | 4 | 0 | 2.0 | 814x890, observe 1020, 2 tiles |
+| random OUT = NOT (A AND (NOT A)) | 2 | 0 | 1.3 | 964x827, observe 1320, 3 tiles |
+| random OUT = ((NOT C) AND C) AND A | 4 | 0 | 3.0 | 964x977, observe 1320, 3 tiles |
+| random OUT = NOT ((B OR (NOT (C AND (NOT B)))) AND B) | 4 | 0 | 8.8 | 1414x1397, observe 2460, 6 tiles |
+| random OUT = (D AND (B AND A)) AND (B OR (NOT E)) | 16 | 0 | 36.9 | 1504x1581, observe 2520, 5 tiles |
+| random OUT = (A AND E) OR E | 4 | 0 | 1.7 | 814x830, observe 900, 2 tiles |
+| random OUT = NOT B | 2 | 0 | 0.3 | 664x213, observe 600, 1 tiles |
+| random OUT = B OR C | 4 | 0 | 0.8 | 664x680, observe 600, 1 tiles |
+| random OUT = NOT (((A OR B) AND C) OR (B AND D)) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| random OUT = (NOT E) AND ((NOT C) AND (NOT ((NOT A) OR E))) | 0 | 0 | 0.0 | rejected: An AND gate can take at most one input that runs through a NOT gate. |
+| random OUT = B AND C | 4 | 0 | 0.7 | 664x617, observe 600, 1 tiles |
+| random OUT = NOT (D OR (NOT ((D AND C) AND A))) | 8 | 0 | 11.8 | 1264x1190, observe 2040, 5 tiles |
+| random OUT = (NOT ((NOT A) OR (B OR E))) OR (NOT (NOT (D AND B))) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| random OUT = NOT ((NOT C) AND C) | 2 | 0 | 1.3 | 964x827, observe 1320, 3 tiles |
+| random OUT = (NOT B) OR C | 4 | 0 | 1.8 | 814x890, observe 1020, 2 tiles |
+| random OUT = NOT (NOT (NOT A)) | 2 | 0 | 1.2 | 1100x650, observe 1440, 3 tiles |
+| random OUT = C OR A | 4 | 0 | 0.8 | 664x680, observe 600, 1 tiles |
+| random OUT = (E OR B) OR B | 4 | 0 | 2.0 | 814x890, observe 1020, 2 tiles |
+| random OUT = (C AND (E AND D)) AND (D AND A) | 16 | 0 | 20.9 | 1312x1311, observe 1980, 4 tiles |
+| random OUT = NOT D | 2 | 0 | 0.3 | 664x213, observe 600, 1 tiles |
+| random OUT = NOT (NOT B) | 2 | 0 | 0.6 | 814x213, observe 1020, 2 tiles |
+| random OUT = (((C AND D) OR C) AND E) OR (E OR ((D AND D) OR (B AND B))) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| random OUT = NOT (C AND ((B AND E) AND (A OR B))) | 16 | 0 | 30.2 | 1522x1371, observe 2400, 5 tiles |
+| random OUT = NOT A | 2 | 0 | 0.3 | 800x650, observe 600, 1 tiles |
+| random OUT = A AND (NOT (((NOT C) AND (NOT C)) AND D)) | 0 | 0 | 0.0 | rejected: An AND gate can take at most one input that runs through a NOT gate. |
+| random OUT = D OR ((E OR B) OR A) | 16 | 0 | 14.9 | 964x1100, observe 1440, 3 tiles |
+| random OUT = B AND E | 4 | 0 | 0.7 | 664x617, observe 600, 1 tiles |
+| random OUT = NOT ((NOT (NOT ((NOT E) AND (E AND E)))) OR (C AND C)) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| random OUT = E OR (D OR (E OR C)) | 8 | 0 | 7.5 | 964x1100, observe 1440, 3 tiles |
+| random OUT = E AND C | 4 | 0 | 0.7 | 664x617, observe 600, 1 tiles |
+| random OUT = E AND (E OR D) | 4 | 0 | 1.9 | 862x801, observe 1080, 2 tiles |
+| random OUT = NOT (((NOT E) OR D) OR (NOT D)) | 0 | 0 | 0.0 | rejected: An OR gate can take only one other gate as an input here; its other input must be a switch. |
+| random OUT = NOT (NOT A) | 2 | 0 | 0.7 | 950x650, observe 1020, 2 tiles |
+| random OUT = (C OR E) AND (C AND (NOT C)) | 4 | 0 | 6.4 | 1384x1341, observe 2160, 4 tiles |
+| random OUT = E OR E | 2 | 0 | 0.4 | 664x680, observe 600, 1 tiles |
+
+#### Presets and chains (same date)
+
+Command: `node scripts/verify-circuits.mjs` (full run; every chain up to 4 gates exhaustively, then uniform and sampled 5- and 6-gate chains). State when this document was written, 0 mismatches so far; the run was left going and can be re-run at any time:
+
+| section | circuits | rows | mismatches | seconds |
+| --- | --- | --- | --- | --- |
+| preset | 1 | 4 | 0 | 5 |
+| chain of 1 | 3 | 10 | 0 | 2 |
+| chain of 2 | 9 | 50 | 0 | 21 |
+| chain of 3 | 27 | 250 | 0 | 198 |
+| chain of 4 | 29 | 564 | 0 | 704 |
+
+Four-gate chains verified so far: and>and>and>and, or>and>and>and, not>and>and>and, and>or>and>and, or>or>and>and, not>or>and>and, and>not>and>and, or>not>and>and, not>not>and>and, and>and>or>and, or>and>or>and, not>and>or>and, and>or>or>and, or>or>or>and, not>or>or>and, and>not>or>and, or>not>or>and, not>not>or>and, and>and>not>and, or>and>not>and, not>and>not>and, and>or>not>and, or>or>not>and, not>or>not>and, and>not>not>and, or>not>not>and, not>not>not>and, and>and>and>or, or>and>and>or.

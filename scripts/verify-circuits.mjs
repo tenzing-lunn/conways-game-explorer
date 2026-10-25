@@ -4,6 +4,7 @@
 //   node scripts/verify-circuits.mjs            full run (presets, every chain up to the cap,
 //                                                depth-2 tree shapes, random trees)
 //   node scripts/verify-circuits.mjs --quick    presets, chains up to 3 gates, a few trees
+//   node scripts/verify-circuits.mjs --only=presets,chains,long,trees,random   chosen sections only
 //
 // Every row of every circuit is simulated to its observation generation and the
 // probes are compared with the boolean evaluation of the spec, at the observation
@@ -15,6 +16,8 @@ import {
 import { describeSpec, gateNode, inputNode } from '../src/circuit-spec.js';
 
 const quick = process.argv.includes('--quick');
+const onlyArg = process.argv.find((arg) => arg.startsWith('--only='));
+const sections = new Set(onlyArg ? onlyArg.slice('--only='.length).split(',') : ['presets', 'chains', 'long', 'trees', 'random']);
 const GATES = ['and', 'or', 'not'];
 const results = [];
 let failures = 0;
@@ -78,11 +81,11 @@ function randomTree(random, budget, names) {
 
 console.log(`verify-circuits: ${quick ? 'quick' : 'full'} run, chain cap ${CIRCUIT_MAX_CHAIN_GATES}, gate cap ${CIRCUIT_MAX_GATES}\n`);
 
-for (const preset of circuitPresets) verify(`preset ${preset.id}`, preset.spec);
+if (sections.has('presets')) for (const preset of circuitPresets) verify(`preset ${preset.id}`, preset.spec);
 
 const chainCap = quick ? 3 : 4;
-for (const gates of chains(chainCap)) verify(`chain ${gates.join('>')}`, { gates });
-if (!quick) {
+if (sections.has('chains')) for (const gates of chains(chainCap)) verify(`chain ${gates.join('>')}`, { gates });
+if (!quick && sections.has('long')) {
   // Longer chains: every uniform chain plus a reproducible sample of mixed ones.
   const random = mulberry32(7);
   for (let length = 5; length <= CIRCUIT_MAX_CHAIN_GATES; length += 1) {
@@ -94,7 +97,7 @@ if (!quick) {
 
 // Depth-2 tree shapes: root(gateA(x, y), gateB(z, w)) with 4, 2 and 3 distinct inputs.
 const leafSets = quick ? [['a', 'b', 'c', 'd']] : [['a', 'b', 'c', 'd'], ['a', 'b', 'a', 'b'], ['a', 'b', 'b', 'c']];
-for (const root of ['and', 'or']) {
+for (const root of sections.has('trees') ? ['and', 'or'] : []) {
   for (const gateA of GATES) {
     for (const gateB of GATES) {
       for (const [x, y, z, w] of leafSets) {
@@ -112,7 +115,7 @@ for (const root of ['and', 'or']) {
 
 // Random trees within the gate cap.
 const random = mulberry32(2026);
-const wanted = quick ? 3 : 30;
+const wanted = sections.has('random') ? (quick ? 3 : 30) : 0;
 let produced = 0;
 let rejected = 0;
 while (produced < wanted) {
