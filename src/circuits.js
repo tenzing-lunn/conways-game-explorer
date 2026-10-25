@@ -1,4 +1,8 @@
 import { cloneBoard, createBoard, createLifeStepper } from './life.js';
+import {
+  GATE_ARITY, MAX_OUTPUTS, describeTree, gateNode, inputNode, isGateNode, isInputNode, normalizeCircuitSpec, treeToChain,
+  validateCircuitSpecShape,
+} from './circuit-spec.js';
 
 const GATE_ORIGIN = Object.freeze({ x: 480, y: 20 });
 const INPUT_PACKET_EAST = '$5bo2bo$9bo$5bo3bo$6b4o!';
@@ -134,6 +138,7 @@ export function buildCircuitExperiment(id, input = {}) {
 
 export function resetCircuitExperiment(experiment) {
   if (!experiment?.id) throw new Error('A circuit experiment is required.');
+  if (experiment.spec) return buildCircuit({ ...experiment.spec, inputs: experiment.inputs });
   if (experiment.gates) return buildCircuitChain({ gates: experiment.gates, inputs: experiment.inputs });
   return buildCircuitExperiment(experiment.id, experiment.inputs);
 }
@@ -190,7 +195,9 @@ const CHAIN_GATES = Object.freeze({
   not: { latency: 420, arity: 1 },
 });
 const CHAIN_TILE = 150;
-const CHAIN_MAX_GATES = 3;
+// Chains up to this length use the original side-by-side layout below, byte for
+// byte; longer chains are laid out by the branching engine further down.
+const LEGACY_CHAIN_MAX_GATES = 3;
 const CHAIN_PACKETS = 14;
 const CHAIN_LANE = 70;
 const PROBE_SIZE = 12;
@@ -208,8 +215,7 @@ export function validateCircuitChain(gates) {
     if (id === 'half-adder') return { ok: false, reason: 'The half-adder is standalone: it has two outputs on two lanes and cannot join a chain.' };
     if (!CHAIN_GATES[id]) return { ok: false, reason: `Unknown gate "${id}".` };
   }
-  // Every AND/OR/NOT chain up to this length was verified by exhaustive simulation.
-  if (gates.length > CHAIN_MAX_GATES) return { ok: false, reason: `Chains longer than ${CHAIN_MAX_GATES} gates are not verified.` };
+  if (gates.length > CIRCUIT_MAX_CHAIN_GATES) return { ok: false, reason: `Up to ${CIRCUIT_MAX_CHAIN_GATES} gates in one chain.` };
   return { ok: true, reason: null };
 }
 
@@ -230,6 +236,7 @@ export function buildCircuitChain({ gates, inputs = {} } = {}) {
   const names = getCircuitChainInputs(gates);
   const values = {};
   for (const name of names) values[name] = Boolean(inputs[name]);
+  if (gates.length > LEGACY_CHAIN_MAX_GATES) return buildTreeCircuit(normalizeCircuitSpec({ gates, inputs: values }), { gates });
   const layout = layoutChain(gates);
 
   const board = createBoard(layout.width, layout.height);
@@ -441,4 +448,442 @@ function decodePlainRawRle(text) {
 function decodeBase64(value) {
   if (typeof atob === 'function') return atob(value);
   return Buffer.from(value, 'base64').toString('utf8');
+}
+
+/**
+ * Branching circuits.
+ *
+ * Any spec that circuit-spec.js accepts (legacy chain, half-adder, preset, or
+ * an AND/OR/NOT expression tree with reusable inputs) is turned into one bounded
+ * board. Trees are laid out recursively from the verified CakeML tiles:
+ *
+ * - A gate's first operand ("A") arrives from the west as an eastbound LWSS
+ *   train, so an A sub-circuit sits to the west, output lane to input lane,
+ *   exactly like the chain. A gap between the tiles is free wire.
+ * - A gate's second operand ("B") arrives from the south. A B sub-circuit is
+ *   the same layout reflected across the anti-diagonal (Life is reflection
+ *   invariant): its output then travels north into the parent's B column, its
+ *   own A chain grows further south and its own B inputs come from the west,
+ *   so every construction only grows west and south of the root.
+ * - Every gate's clock is 60 generations (one packet slot = 30 cells of LWSS
+ *   travel), so every input delay is a multiple of 60 and every gap a multiple
+ *   of 30 cells. Measured latencies: AND 300 (a transparent wire), OR 420 and
+ *   NOT 420 (the NOT is a p60 gun whose stream the A train suppresses).
+ * - Leaf B trains: AND wants the standard position (+30k); the OR wants +3 for
+ *   a clean phase and +60 more because its B path is two slots faster than its
+ *   A path, i.e. +63. A reflected sub-circuit under an AND is placed with its
+ *   tile at x-4 and y + (tA - childDelay)/2 + 134, measured slot-exactly with
+ *   20-packet trains (see docs/circuit-research-handoff.md).
+ *
+ * Verified restrictions (validateCircuit explains them in plain English): an
+ * OR takes at most one gate operand (it goes on the A side; its B must be a
+ * switch), an AND takes at most one never-ending operand (a NOT-driven signal;
+ * it goes on the A side), and the whole board stays within 3000 cells.
+ */
+export const CIRCUIT_MAX_CHAIN_GATES = 6;
+export const CIRCUIT_MAX_GATES = 10;
+const BOARD_LIMIT = 3000;
+const SLOT_CELLS = 30;
+const LEAF_B_OFFSET = Object.freeze({ and: 0, or: 63 });
+const CHILD_B_OFFSET = 134;
+const CHILD_B_X = -4;
+const TREE_PACKETS = 14;
+const TERMINATOR_WIDTH = 14;
+
+function xorTree(x, y) {
+  return gateNode('and', gateNode('not', gateNode('and', x, y)), gateNode('or', x, y));
+}
+const a = () => inputNode('a');
+const b = () => inputNode('b');
+const c = () => inputNode('c');
+
+export const circuitPresets = Object.freeze([
+  {
+    id: 'xor',
+    name: 'XOR',
+    title: 'XOR',
+    description: 'Lights when exactly one of A and B is on: an OR gate and an AND gate feeding a NOT, combined by a final AND.',
+    spec: { outputs: [{ id: 'out', label: 'A XOR B', tree: xorTree(a(), b()) }], inputs: { a: false, b: false } },
+  },
+  {
+    id: 'full-adder',
+    name: 'Full adder',
+    title: 'Full adder',
+    description: 'Adds three bits A, B and C: Sum lights for an odd count of ones and Carry when at least two are on.',
+    spec: {
+      outputs: [
+        { id: 'sum', label: 'Sum', tree: xorTree(xorTree(a(), b()), c()) },
+        { id: 'carry', label: 'Carry', tree: gateNode('and', gateNode('or', a(), b()), gateNode('or', gateNode('and', a(), b()), c())) },
+      ],
+      inputs: { a: false, b: false, c: false },
+    },
+  },
+].map((preset) => Object.freeze(preset)));
+
+function getPreset(id) {
+  return circuitPresets.find((preset) => preset.id === id) ?? null;
+}
+
+// Expands presets so every spec becomes 'half-adder' or 'tree'.
+function resolveSpec(spec) {
+  const normalized = normalizeCircuitSpec(spec);
+  if (normalized.kind !== 'preset') return normalized;
+  const preset = getPreset(normalized.id);
+  if (!preset) throw new Error(`Unknown circuit preset "${normalized.id}".`);
+  const expanded = normalizeCircuitSpec({ ...preset.spec, inputs: { ...preset.spec.inputs, ...normalized.inputs } });
+  return { ...expanded, preset: preset.id };
+}
+
+export function validateCircuit(spec) {
+  const shape = validateCircuitSpecShape(spec);
+  if (!shape.ok) return shape;
+  let normalized;
+  try {
+    normalized = resolveSpec(spec);
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
+  if (normalized.kind === 'half-adder') return { ok: true, reason: null };
+  if (normalized.outputs.length > MAX_OUTPUTS) return { ok: false, reason: `${MAX_OUTPUTS === 2 ? 'Two' : MAX_OUTPUTS} outputs at most.` };
+  const chain = normalized.outputs.length === 1 ? treeToChain(normalized.outputs[0].tree) : null;
+  if (chain) return validateCircuitChain(chain);
+  const total = normalized.outputs.reduce((sum, output) => sum + countGates(output.tree), 0);
+  if (total > CIRCUIT_MAX_GATES) return { ok: false, reason: `Circuits here can use up to ${CIRCUIT_MAX_GATES} gates.` };
+  for (const output of normalized.outputs) {
+    const problem = findUnsupportedNode(output.tree);
+    if (problem) return { ok: false, reason: problem };
+  }
+  try {
+    planCircuit(normalized);
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
+  return { ok: true, reason: null };
+}
+
+export function buildCircuit(spec) {
+  const validation = validateCircuit(spec);
+  if (!validation.ok) throw new Error(validation.reason);
+  const normalized = resolveSpec(spec);
+  if (normalized.kind === 'half-adder') {
+    return { ...buildCircuitExperiment('half-adder', normalized.inputs), spec: { gates: ['half-adder'], inputs: normalized.inputs } };
+  }
+  const chain = normalized.outputs.length === 1 ? treeToChain(normalized.outputs[0].tree) : null;
+  if (chain && chain.length <= LEGACY_CHAIN_MAX_GATES) {
+    return { ...buildCircuitChain({ gates: chain, inputs: normalized.inputs }), spec: { gates: chain, inputs: normalized.inputs } };
+  }
+  return buildTreeCircuit(normalized, { gates: chain ?? undefined });
+}
+
+// The expected boolean table, in the same row order as getCircuitChainTruthTable.
+export function getCircuitTruthTable(spec) {
+  const normalized = resolveSpec(spec);
+  const names = normalized.kind === 'half-adder' ? ['a', 'b'] : Object.keys(normalized.inputs);
+  const rows = [];
+  for (let mask = 0; mask < 1 << names.length; mask += 1) {
+    const inputs = {};
+    names.forEach((name, index) => { inputs[name] = Boolean(mask & (1 << index)); });
+    const outputs = {};
+    if (normalized.kind === 'half-adder') {
+      outputs.sum = inputs.a !== inputs.b;
+      outputs.carry = inputs.a && inputs.b;
+    } else {
+      for (const output of normalized.outputs) outputs[output.id] = evaluateTree(output.tree, inputs);
+    }
+    rows.push({ inputs, outputs });
+  }
+  return rows;
+}
+
+export function evaluateTree(node, inputs) {
+  if (isInputNode(node)) return Boolean(inputs[node.input]);
+  if (node.gate === 'not') return !evaluateTree(node.a, inputs);
+  const first = evaluateTree(node.a, inputs);
+  const second = evaluateTree(node.b, inputs);
+  return node.gate === 'and' ? first && second : first || second;
+}
+
+function countGates(node) {
+  if (!isGateNode(node)) return 0;
+  return 1 + countGates(node.a) + (GATE_ARITY[node.gate] === 2 ? countGates(node.b) : 0);
+}
+
+// A signal "ends" when its train is finite. NOT gates emit a never-ending
+// stream (their gun keeps firing outside the input window); an AND with one
+// finite operand cuts it back down, an OR keeps it going.
+function signalEnds(node) {
+  if (isInputNode(node)) return true;
+  if (node.gate === 'not') return false;
+  if (node.gate === 'and') return signalEnds(node.a) || signalEnds(node.b);
+  return signalEnds(node.a) && signalEnds(node.b);
+}
+
+function findUnsupportedNode(node) {
+  if (!isGateNode(node)) return null;
+  if (node.gate === 'or' && isGateNode(node.a) && isGateNode(node.b)) {
+    return 'An OR gate can take only one other gate as an input here; its other input must be a switch.';
+  }
+  if (node.gate === 'and' && !signalEnds(node.a) && !signalEnds(node.b)) {
+    return 'An AND gate can take at most one input that runs through a NOT gate.';
+  }
+  const first = findUnsupportedNode(node.a);
+  if (first) return first;
+  return GATE_ARITY[node.gate] === 2 ? findUnsupportedNode(node.b) : null;
+}
+
+// Operand order the layout can build: a gate operand of an OR goes on the A
+// side, and a never-ending operand of an AND goes on the A side.
+function orderOperands(node) {
+  if (node.gate === 'not') return [node.a, undefined];
+  let first = node.a;
+  let second = node.b;
+  if (node.gate === 'or' && isGateNode(second) && isInputNode(first)) [first, second] = [second, first];
+  if (node.gate === 'and' && isGateNode(second) && !signalEnds(second) && signalEnds(first)) [first, second] = [second, first];
+  return [first, second];
+}
+
+// Anti-diagonal reflection of a child frame whose tile sits at (hx, hy).
+function reflectPoint(hx, hy, [x, y]) {
+  return [hx + 149 - y, hy + 149 - x];
+}
+const REFLECTED_SIDE = Object.freeze({ west: 'south', south: 'west', east: 'north', north: 'east' });
+
+/**
+ * Lays out one expression tree in its root's frame (root tile at 0,0). Returns
+ * cells, obstacle rects, tile/port metadata and the output delay in generations.
+ * `base` is an extra delay given to every switch train (used to synchronise the
+ * two outputs of a two-output circuit).
+ */
+function layoutTree(node, base, values) {
+  if (isInputNode(node)) throw new Error('A circuit needs at least one gate.');
+  const [first, second] = orderOperands(node);
+  const aLayout = isGateNode(first) ? layoutTree(first, base, values) : null;
+  const bLayout = second !== undefined && isGateNode(second) ? layoutTree(second, base, values) : null;
+  const chosen = layoutGate(node.gate, first, aLayout, second, bLayout, base, values);
+  // An AND with two gate operands can hang either one; keep the more compact result.
+  if (node.gate === 'and' && aLayout && bLayout && signalEnds(first)) {
+    const swapped = layoutGate(node.gate, second, bLayout, first, aLayout, base, values);
+    if (footprint(swapped) < footprint(chosen)) return swapped;
+  }
+  return chosen;
+}
+
+function footprint(layout) {
+  let minX = 0; let maxY = CHAIN_TILE;
+  for (const [x0, , , y1] of layout.rects) { minX = Math.min(minX, x0); maxY = Math.max(maxY, y1); }
+  return Math.max(-minX, maxY) * 4 + (-minX + maxY);
+}
+
+function layoutGate(gate, first, aChild, second, bChild, base, values) {
+  const latency = CHAIN_GATES[gate].latency;
+
+  // A-side delay (generations); gaps are multiples of one slot.
+  let gap = 0;
+  let tA = aChild ? aChild.delay : base;
+  if (bChild) {
+    if (gate !== 'and') throw new Error('An OR gate can take only one other gate as an input here; its other input must be a switch.');
+    // One slot of extra A delay keeps the reflected child's tile clear of this tile.
+    const earliest = bChild.delay + 60;
+    if (tA < earliest) {
+      if (aChild) gap = (earliest - aChild.delay) / 2;
+      tA = earliest;
+    }
+  }
+  const place = (extra) => {
+    const aShift = aChild ? -CHAIN_TILE - gap - extra : 0;
+    const aDelay = tA + 2 * extra;
+    const hy = bChild ? (aDelay - bChild.delay) / 2 + CHILD_B_OFFSET : 0;
+    return { aShift, aDelay, hy };
+  };
+  let extra = 0;
+  let placement = place(0);
+  if (aChild && bChild) {
+    const aRects = () => aChild.rects.map(([x0, y0, x1, y1]) => [x0 + placement.aShift, y0, x1 + placement.aShift, y1]);
+    const bRects = () => bChild.rects.map((rect) => reflectRect(CHILD_B_X, placement.hy, rect));
+    while (rectsOverlap(aRects(), bRects())) {
+      extra += SLOT_CELLS;
+      if (extra > BOARD_LIMIT) throw new Error('These gates cannot be arranged on the board.');
+      placement = place(extra);
+    }
+  }
+  const { aShift, aDelay, hy } = placement;
+
+  const cells = decodeRawRle(RAW_RLE[gate]).map(([x, y]) => [x, y]);
+  const rects = [[-3, -3, CHAIN_TILE + 3, CHAIN_TILE + 3]];
+  const tile = { gateId: gate, x: 0, y: 0, mirrored: false, inputs: [], output: { side: 'east', x: CHAIN_TILE, y: 75 } };
+  const tiles = [tile];
+  const ports = [];
+
+  // A operand.
+  if (aChild) {
+    for (const cell of aChild.cells) cells.push([cell[0] + aShift, cell[1]]);
+    for (const rect of aChild.rects) rects.push([rect[0] + aShift, rect[1], rect[2] + aShift, rect[3]]);
+    if (aShift + CHAIN_TILE < 0) rects.push([aShift + CHAIN_TILE, 68, 0, 77]);
+    for (const child of aChild.tiles) tiles.push({ ...child, x: child.x + aShift, inputs: child.inputs.map((input) => ({ ...input, x: input.x + aShift })), output: { ...child.output, x: child.output.x + aShift } });
+    for (const port of aChild.ports) ports.push({ ...port, x: port.x + aShift, tileIndex: port.tileIndex + 1 });
+  } else {
+    const name = first.input;
+    const west = aDelay / 2;
+    if (values[name]) for (let k = 0; k < TREE_PACKETS; k += 1) for (const [x, y] of decodePlainRawRle(INPUT_PACKET_EAST)) cells.push([-35 - west - 30 * k + x, 70 + y]);
+    rects.push([-35 - west - 30 * (TREE_PACKETS - 1) - 3, 68, 0, 77]);
+    tile.inputs.push({ name, side: 'west', x: 0, y: 72 });
+  }
+
+  // B operand.
+  if (second !== undefined) {
+    if (bChild) {
+      for (const cell of bChild.cells) cells.push(reflectPoint(CHILD_B_X, hy, cell));
+      for (const rect of bChild.rects) rects.push(reflectRect(CHILD_B_X, hy, rect));
+      rects.push([68, CHAIN_TILE, 77, hy]);
+      const offset = tiles.length;
+      for (const child of bChild.tiles) {
+        const [x1, y1] = reflectPoint(CHILD_B_X, hy, [child.x, child.y]);
+        const [x2, y2] = reflectPoint(CHILD_B_X, hy, [child.x + CHAIN_TILE - 1, child.y + CHAIN_TILE - 1]);
+        const [ox, oy] = reflectPoint(CHILD_B_X, hy, [child.output.x, child.output.y]);
+        tiles.push({
+          ...child,
+          x: Math.min(x1, x2),
+          y: Math.min(y1, y2),
+          mirrored: !child.mirrored,
+          inputs: child.inputs.map((input) => { const [x, y] = reflectPoint(CHILD_B_X, hy, [input.x, input.y]); return { ...input, side: REFLECTED_SIDE[input.side], x, y }; }),
+          output: { side: REFLECTED_SIDE[child.output.side], x: ox, y: oy },
+        });
+      }
+      for (const port of bChild.ports) {
+        const [x, y] = reflectPoint(CHILD_B_X, hy, [port.x, port.y]);
+        ports.push({ ...port, side: REFLECTED_SIDE[port.side], x, y, tileIndex: port.tileIndex + offset });
+      }
+    } else {
+      const name = second.input;
+      const dy = aDelay / 2 + LEAF_B_OFFSET[gate];
+      if (values[name]) for (let k = 0; k < TREE_PACKETS; k += 1) for (const [x, y] of decodePlainRawRle(INPUT_PACKET_NORTH)) cells.push([70 + x, 160 + dy + 30 * k + y]);
+      rects.push([68, CHAIN_TILE, 77, 160 + dy + 30 * (TREE_PACKETS - 1) + 7]);
+      tile.inputs.push({ name, side: 'south', x: 72, y: CHAIN_TILE });
+    }
+  }
+  for (const input of tile.inputs) ports.push({ type: 'input', tileIndex: 0, ...input });
+
+  return { cells, rects, tiles, ports, delay: aDelay + latency };
+}
+
+function reflectRect(hx, hy, [x0, y0, x1, y1]) {
+  const [ax, ay] = reflectPoint(hx, hy, [x0, y0]);
+  const [bx, by] = reflectPoint(hx, hy, [x1, y1]);
+  return [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)];
+}
+
+function rectsOverlap(first, second) {
+  for (const [ax0, ay0, ax1, ay1] of first) {
+    for (const [bx0, by0, bx1, by1] of second) {
+      if (ax0 <= bx1 && bx0 <= ax1 && ay0 <= by1 && by0 <= ay1) return true;
+    }
+  }
+  return false;
+}
+
+// Lays out every output and places them on one board, stacked top to bottom.
+// Outputs share one observation generation: a faster output's terminator and
+// probe sit further east, so its train spends the difference as free wire.
+// Throws with a user-facing reason when the board would be too large.
+function planCircuit(normalized) {
+  const values = normalized.inputs;
+  const layouts = normalized.outputs.map((output) => layoutTree(output.tree, 0, values));
+  const rootDelays = layouts.map((layout, index) => layout.delay - CHAIN_GATES[normalized.outputs[index].tree.gate].latency);
+  const target = Math.max(...rootDelays);
+  const probeOffsets = rootDelays.map((delay) => (target - delay) / 2);
+  const extents = layouts.map((layout) => {
+    let minX = 0; let maxY = CHAIN_TILE;
+    for (const [x0, y0, x1, y1] of layout.rects) { minX = Math.min(minX, x0); maxY = Math.max(maxY, y1); }
+    for (const [x, y] of layout.cells) { minX = Math.min(minX, x); maxY = Math.max(maxY, y); }
+    let minTileX = 0;
+    for (const tile of layout.tiles) minTileX = Math.min(minTileX, tile.x);
+    return { minX, maxY, minTileX };
+  });
+  const rootX = Math.max(...extents.map((extent) => Math.max(GATE_ORIGIN.x - extent.minTileX, 10 - extent.minX)));
+  const rootYs = [];
+  let nextY = GATE_ORIGIN.y;
+  extents.forEach((extent) => {
+    rootYs.push(nextY);
+    nextY += extent.maxY + 40;
+  });
+  const width = rootX + CHAIN_TILE + Math.max(...probeOffsets) + TERMINATOR_WIDTH + 20;
+  const height = nextY;
+  if (width > BOARD_LIMIT || height > BOARD_LIMIT) throw new Error('This circuit is too large for the board.');
+  return { layouts, rootX, rootYs, probeOffsets, width, height, observeGeneration: 600 + target };
+}
+
+function buildTreeCircuit(normalized, { gates } = {}) {
+  const plan = planCircuit(normalized);
+  const board = createBoard(plan.width, plan.height);
+  const terminator = decodeRawRle(RAW_RLE.terminator);
+  const tiles = [];
+  const ports = [];
+  const outputs = [];
+  normalized.outputs.forEach((output, index) => {
+    const layout = plan.layouts[index];
+    const ox = plan.rootX;
+    const oy = plan.rootYs[index];
+    const probeX = ox + CHAIN_TILE + plan.probeOffsets[index];
+    stampBounded(board, layout.cells, ox, oy);
+    stampBounded(board, terminator, probeX, oy);
+    const offset = tiles.length;
+    for (const tile of layout.tiles) {
+      tiles.push({
+        gateId: tile.gateId,
+        index: tiles.length,
+        outputId: output.id,
+        x: tile.x + ox,
+        y: tile.y + oy,
+        width: CHAIN_TILE,
+        height: CHAIN_TILE,
+        rotation: tile.mirrored ? 90 : 0,
+        mirrored: tile.mirrored,
+        inputs: tile.inputs.map((input) => ({ name: input.name, side: input.side, x: input.x + ox, y: input.y + oy })),
+        output: { side: tile.output.side, x: tile.output.x + ox, y: tile.output.y + oy },
+      });
+    }
+    for (const port of layout.ports) ports.push({ ...port, x: port.x + ox, y: port.y + oy, tileIndex: port.tileIndex + offset });
+    const probe = { id: output.id, label: output.label, x: probeX, y: oy + 75, width: PROBE_SIZE, height: PROBE_SIZE };
+    outputs.push(probe);
+    ports.push({ type: 'output', tileIndex: offset, ...probe });
+  });
+  const spec = gates
+    ? { gates: [...gates], inputs: { ...normalized.inputs } }
+    : normalized.preset
+      ? { preset: normalized.preset, inputs: { ...normalized.inputs } }
+      : { outputs: normalized.outputs.map((output) => ({ id: output.id, label: output.label, tree: output.tree })), inputs: { ...normalized.inputs } };
+  const preset = normalized.preset ? getPreset(normalized.preset) : null;
+  const expressions = normalized.outputs.map((output) => `${output.label} = ${describeTree(output.tree)}`);
+  return {
+    id: gates ? `chain:${gates.join('>')}` : preset ? `preset:${preset.id}` : `tree:${normalized.outputs.map((output) => serializeTree(output.tree)).join('|')}`,
+    title: gates ? `${describeChain(gates)} chain` : preset ? preset.title : 'Custom circuit',
+    description: gates
+      ? 'Gates tiled on the 150-cell grid; each output train feeds the next gate, later inputs arrive from the south with matched delays.'
+      : preset?.description ?? expressions.join('; '),
+    ...(gates ? { gates: [...gates] } : {}),
+    spec,
+    inputs: { ...normalized.inputs },
+    outputs: gates ? [{ ...outputs[0], label: describeChainExpression(gates, getCircuitChainInputs(gates)) }] : outputs,
+    observeGeneration: plan.observeGeneration,
+    finiteSignals: true,
+    wrapping: false,
+    board,
+    authoredBoard: cloneBoard(board),
+    tiles,
+    ports: gates ? ports.map((port) => (port.type === 'output' ? { ...port, label: describeChainExpression(gates, getCircuitChainInputs(gates)) } : port)) : ports,
+  };
+}
+
+function serializeTree(node) {
+  if (isInputNode(node)) return node.input;
+  if (node.gate === 'not') return `not(${serializeTree(node.a)})`;
+  return `${node.gate}(${serializeTree(node.a)},${serializeTree(node.b)})`;
+}
+
+export function runCircuitSpecToObservation(spec) {
+  const experiment = buildCircuit(spec);
+  const stepper = createCircuitStepper(experiment);
+  let board = experiment.board;
+  while (board.generation < experiment.observeGeneration) board = stepper.step();
+  return { experiment, board, outputs: readCircuitOutputs(experiment, board) };
 }

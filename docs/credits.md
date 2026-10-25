@@ -17,6 +17,11 @@ inspected revision, so this credit is not a claim of a broader upstream
 license. The exact source files, hashes, and probe method are listed in
 [`circuit-research-handoff.md`](circuit-research-handoff.md).
 
+Branching circuits, longer chains and the XOR preset reuse the same five tile
+files (AND, OR, NOT, half-adder, terminator from the revision above), placed,
+delayed and in some positions reflected across the diagonal; no further
+upstream tiles were fetched for them.
+
 Research references used to explain the constructions include Nicholas
 Carlini's gate article and the Myreen/Carneiro half-adder paper, both linked in
 the research handoff. Their references should be consulted for the original
