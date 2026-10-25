@@ -256,6 +256,7 @@ const elements = {
   circuitName: $('#circuit-name'),
   formulaList: $('#formula-list'),
   chainNote: $('#chain-note'),
+  inputsNote: $('#inputs-note'),
   chipMenu: $('#chip-menu'),
   inputsList: $('#inputs-list'),
   outputsList: $('#outputs-list'),
@@ -2122,6 +2123,7 @@ function restoreCircuit(spec) {
   } catch {
     return;
   }
+  if (state.mode === 'studio') setRailTab('logic');
   fitCircuit({ deferred: true });
 }
 
@@ -2242,17 +2244,20 @@ function renderInspector() {
   const { tiles, ports } = getCircuitGeometry(experiment);
   elements.inputsList.innerHTML = '';
   for (const name of circuitInputNames(spec)) {
-    const entries = [];
+    const gates = [];
     for (const port of ports) {
       if (port.name !== name) continue;
-      const entry = `${PORT_ARROWS[port.side] || '→'} ${GATE_CARDS[tiles[port.tileIndex]?.gateId]?.name || String(tiles[port.tileIndex]?.gateId || '').toUpperCase()}`;
-      if (!entries.includes(entry)) entries.push(entry);
+      const gate = GATE_CARDS[tiles[port.tileIndex]?.gateId]?.name || String(tiles[port.tileIndex]?.gateId || '').toUpperCase();
+      if (!gates.includes(gate)) gates.push(gate);
     }
+    const listed = gates.length > 1 ? `${gates.slice(0, -1).join(', ')} and ${gates.at(-1)}` : gates[0] || '';
     const row = document.createElement('label');
     row.className = 'switch-row';
-    row.innerHTML = `<span>${name.toUpperCase()}<small>${escapeHtml(entries.join(' · '))}</small></span><input class="switch" type="checkbox" role="switch" data-input="${name}" aria-label="Input ${name.toUpperCase()}" ${spec.inputs[name] ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
+    row.innerHTML = `<span>${name.toUpperCase()}<small>${escapeHtml(listed ? `feeds ${listed}` : '')}</small></span><input class="switch" type="checkbox" role="switch" data-input="${name}" aria-label="Input ${name.toUpperCase()}" ${spec.inputs[name] ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
     elements.inputsList.append(row);
   }
+  // Explain once why a lane may enter a gate from below or the side.
+  elements.inputsNote.hidden = !tiles.some((tile) => Number(tile.rotation));
 
   elements.outputsList.innerHTML = '';
   for (const port of experiment.outputs) {
@@ -2467,6 +2472,12 @@ function renderTruthTable() {
 function triggerHaptic(action) {
   const pattern = getHapticPattern(action);
   if (pattern.length > 0) navigator.vibrate?.(pattern);
+}
+
+// New content (another circuit, an opened sheet) clears a stale toast.
+function dismissToast() {
+  window.clearTimeout(feedbackTimer);
+  elements.toast.hidden = true;
 }
 
 function showToast(message, { kind = 'info' } = {}) {
@@ -3025,7 +3036,7 @@ function drawCircuitMarkers(cellSize) {
   ctx.textBaseline = 'middle';
 
   // Gate tile outlines, named above each tile (inside it when the tile sits
-  // at the board's top edge); a tile drawn on its side says so.
+  // at the board's top edge).
   ctx.setLineDash([6, 4]);
   for (const tile of tiles) {
     ctx.strokeRect(Math.round(tile.x * cellSize) + 0.5, Math.round(tile.y * cellSize) + 0.5, Math.round(tile.width * cellSize), Math.round(tile.height * cellSize));
@@ -3034,9 +3045,8 @@ function drawCircuitMarkers(cellSize) {
   ctx.textAlign = 'left';
   for (const tile of tiles) {
     const name = GATE_CARDS[tile.gateId]?.name || String(tile.gateId).toUpperCase();
-    const turned = Number(tile.rotation) ? ' (turned)' : '';
     const top = tile.y * cellSize;
-    ctx.fillText(name + turned, tile.x * cellSize + 6, top >= 16 ? top - 10 : top + 12);
+    ctx.fillText(name, tile.x * cellSize + 6, top >= 16 ? top - 10 : top + 12);
   }
 
   // Input lanes with direction arrows, one per port (a reused input has several).
@@ -4376,6 +4386,7 @@ function toggleMenu(entry) {
 }
 
 function openRail(open) {
+  if (open) dismissToast();
   elements.rail.dataset.open = String(open);
   elements.sheetBackdrop.hidden = !open;
   elements.patternsOpen.setAttribute('aria-expanded', String(open));
@@ -4386,6 +4397,7 @@ function openRail(open) {
 }
 
 function openInspector(open) {
+  if (open) dismissToast();
   elements.inspector.dataset.open = String(open);
   elements.inspectorToggle.setAttribute('aria-expanded', String(open));
   elements.sheetBackdrop.hidden = !open;
@@ -4714,6 +4726,7 @@ function bindEvents() {
     if (!card) return;
     // Reopening the card that is already open keeps its switches.
     const spec = circuitCardId() === card.id ? state.circuitSpec : card.spec;
+    dismissToast();
     openCircuit(spec);
     elements.inspector.scrollTop = 0;
     closeSheets();

@@ -58,8 +58,21 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
   color: var(--muted);
 }
 
-/* Five groups in one scrolling row; the rule sits under the whole row and
-   a fade marks the edge with more tabs behind it. */
+/* Search and group tabs stay pinned while the cards scroll under them. */
+.rail-panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding-bottom: 4px;
+  background: var(--surface);
+}
+
+/* Desktop: every group tab visible, wrapping to a second row when needed,
+   with one rule under the whole block. Phone: one scrolling row. */
 .pattern-tabs-wrap {
   flex: 0 0 auto;
   border-bottom: 1px solid var(--line);
@@ -71,27 +84,8 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
 
 .pattern-tabs {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 2px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-
-.pattern-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.pattern-tabs[data-overflow="end"] {
-  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
-}
-
-.pattern-tabs[data-overflow="start"] {
-  mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
-}
-
-.pattern-tabs[data-overflow="start end"] {
-  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
 }
 
 .rail-panel .search-field {
@@ -101,7 +95,7 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
 .pattern-tabs > button {
   flex: 0 0 auto;
   height: 30px;
-  padding: 0 8px;
+  padding: 0 7px;
   font-size: 13px;
   font-weight: 500;
   color: var(--muted);
@@ -359,6 +353,9 @@ body[data-tool="stamp"] #world {
   right: 12px;
   bottom: 8px;
   margin: 0;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
   font-family: var(--mono);
   font-size: 12px;
   color: var(--muted);
@@ -545,8 +542,28 @@ body[data-playing="true"] .icon-pause {
   }
 
   .pattern-tabs {
+    flex-wrap: nowrap;
     gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .pattern-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .pattern-tabs[data-overflow="end"] {
+    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  }
+
+  .pattern-tabs[data-overflow="start"] {
+    mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+  }
+
+  .pattern-tabs[data-overflow="start end"] {
+    mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
   }
 
   .pattern-tabs > button {

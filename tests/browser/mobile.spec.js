@@ -125,6 +125,13 @@ test('top-bar tabs, the brand and the rail kind tabs are 40px touch targets', as
     const box = await page.locator(selector).boundingBox();
     expect(Math.min(box.width, box.height), selector).toBeGreaterThanOrEqual(40);
   }
+  expect((await page.locator('#project-title').boundingBox()).height).toBeGreaterThanOrEqual(40);
+  await page.locator('#inspector-toggle').click();
+  await expect(page.locator('#inspector')).toHaveAttribute('data-open', 'true');
+  for (const selector of ['#grid-size', '#edges']) {
+    expect((await page.locator(selector).boundingBox()).height, selector).toBeGreaterThanOrEqual(40);
+  }
+  await page.locator('#inspector-close').click();
   await openPatterns(page, isMobile);
   for (const tab of await page.locator('[data-rail-tab]').all()) {
     const box = await tab.boundingBox();

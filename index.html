@@ -138,11 +138,13 @@
           </div>
           <!-- /STUDIO -->
           <section id="pattern-panel" class="rail-panel">
-            <label class="search-field">
-              <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
-              <input id="pattern-search" type="search" placeholder="Search patterns" aria-label="Search patterns" autocomplete="off" />
-            </label>
-            <div class="pattern-tabs-wrap"><div id="pattern-tabs" class="pattern-tabs" role="tablist" aria-label="Pattern groups"></div></div>
+            <div class="rail-panel-head">
+              <label class="search-field">
+                <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
+                <input id="pattern-search" type="search" placeholder="Search patterns" aria-label="Search patterns" autocomplete="off" />
+              </label>
+              <div class="pattern-tabs-wrap"><div id="pattern-tabs" class="pattern-tabs" role="tablist" aria-label="Pattern groups"></div></div>
+            </div>
             <div id="pattern-list" class="card-list" role="list"></div>
           </section>
           <!-- STUDIO: logic panel -->
@@ -373,6 +375,7 @@
             <p id="chain-note" class="inspector-note" hidden></p>
             <h4>Inputs</h4>
             <div id="inputs-list" class="switch-list"></div>
+            <p id="inputs-note" class="inspector-note" hidden>Some gates are drawn on their side so a second gate can feed them.</p>
             <h4>Outputs</h4>
             <div id="outputs-list" class="lamp-list"></div>
             <button id="run-circuit" class="button button-primary button-wide" type="button">

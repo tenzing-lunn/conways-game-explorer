@@ -45,6 +45,10 @@ test.describe('desktop', () => {
     expect(geometry.tiles.map((tile) => tile.gateId).sort()).toEqual(['and', 'and', 'not', 'or']);
     const turned = geometry.tiles.filter((tile) => tile.rotation === 90);
     expect(turned).toHaveLength(1);
+    // Plain words: the rows say which gates each input feeds, and one note
+    // explains the gate drawn on its side.
+    expect(await page.locator('#inputs-list .switch-row small').allInnerTexts()).toEqual(['feeds AND and OR', 'feeds AND and OR']);
+    await expect(page.locator('#inputs-note')).toHaveText('Some gates are drawn on their side so a second gate can feed them.');
     expect(geometry.ports.filter((port) => port.type === 'input')).toHaveLength(4);
     expect(geometry.ports.filter((port) => port.type === 'input' && port.tileIndex === turned[0].index).map((port) => port.side).sort()).toEqual(['south', 'west']);
     // Fitted: every tile and the input lanes' queued packets sit inside the canvas.
@@ -100,7 +104,10 @@ test.describe('desktop', () => {
     // Opening another circuit from the rail shows its heading and formula.
     await page.locator('#inspector').evaluate((node) => { node.scrollTop = node.scrollHeight; });
     expect(await page.locator('#inspector').evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    await expect(page.locator('#toast')).toBeVisible();
     await pickGate(page, isMobile, 'xor');
+    // A stale toast never covers the new circuit.
+    await expect(page.locator('#toast')).toBeHidden();
     expect(await page.locator('#inspector').evaluate((node) => node.scrollTop)).toBe(0);
     await expect(page.locator('#circuit-heading')).toBeInViewport();
     await expect(page.locator('#formula-list')).toBeInViewport();
@@ -163,6 +170,8 @@ test.describe('desktop', () => {
     await expect(page.locator('#project-title')).toHaveValue('Branching circuit');
     await expect(page.locator('#circuit-section')).toBeVisible();
     await expect.poll(() => spec(page)).toEqual(['OUT = (A OR B) AND (A OR C)']);
+    await expect(page.locator('[data-rail-tab="logic"]')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#logic-panel')).toBeVisible();
     const switches = await page.locator('#inputs-list [data-input]').evaluateAll((nodes) => nodes.map((node) => `${node.dataset.input}=${node.checked ? 1 : 0}`));
     expect(switches).toEqual(['a=1', 'b=0', 'c=1']);
     await expect(page.locator('#zoom-label')).not.toHaveText('100%');

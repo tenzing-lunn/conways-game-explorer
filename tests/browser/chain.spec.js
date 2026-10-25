@@ -28,7 +28,7 @@ test.describe('desktop', () => {
     await addGate(page, 'or');
     await expect.poll(() => chips(page)).toEqual(['and', 'or']);
     expect(await inputNames(page)).toEqual(['a', 'b', 'c']);
-    expect(await page.locator('#inputs-list .switch-row small').allInnerTexts()).toEqual(['→ AND', '↑ AND', '↑ OR']);
+    expect(await page.locator('#inputs-list .switch-row small').allInnerTexts()).toEqual(['feeds AND', 'feeds AND', 'feeds OR']);
     expect(await formula(page)).toEqual(['OUT = (A AND B) OR C']);
     await expect(page.locator('#outputs-list .lamp-row > span').first()).toHaveText('OUT');
     await expect(page.locator('#circuit-name')).toHaveText('2 gates. Choose any part of the formula to change it.');

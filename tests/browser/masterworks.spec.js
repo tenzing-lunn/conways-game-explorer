@@ -145,6 +145,28 @@ test('the largest masterwork grows the board, fits the view, explains in a toast
   expect(redone.wrapping, 'Redo makes the board bounded again').toBe(false);
 });
 
+test('desktop: every pattern group tab is fully visible, and search and tabs stay pinned while the cards scroll', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'Desktop rail only.');
+  for (const path of ['/', '/studio']) {
+    await page.goto(path);
+    await expect(page.locator('#pattern-tabs')).toBeVisible();
+    const rail = await page.locator('#pattern-panel').boundingBox();
+    const tabs = page.locator('[data-pattern-tab]');
+    await expect(tabs).toHaveCount(5);
+    for (const tab of await tabs.all()) {
+      const box = await tab.boundingBox();
+      expect(box.x, await tab.textContent()).toBeGreaterThanOrEqual(rail.x);
+      expect(box.x + box.width, await tab.textContent()).toBeLessThanOrEqual(rail.x + rail.width);
+    }
+    expect(await page.locator('#pattern-tabs').evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  }
+  await page.locator('[data-pattern-tab="masterworks"]').click();
+  const before = await page.locator('#pattern-tabs').boundingBox();
+  await page.locator('#pattern-panel').evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  await expect(page.locator('#pattern-search')).toBeInViewport();
+  expect((await page.locator('#pattern-tabs').boundingBox()).y).toBeCloseTo(before.y, 0);
+});
+
 test('search finds masterworks by discoverer', async ({ page, isMobile }) => {
   const works = await listMasterworks(page);
   const work = works.find((entry) => entry.discoverer);
