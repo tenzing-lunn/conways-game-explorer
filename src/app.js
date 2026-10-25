@@ -2064,7 +2064,8 @@ function fitCircuit({ deferred = false } = {}) {
   } else {
     // Too tall to fit whole: keep the tiles and labels at the top with 16px
     // padding and let the lanes run off the bottom.
-    zoom = Math.max(getMinZoom(), zoomFor({ ...must, bottom: must.bottom + 4 }, 8, 16));
+    // 30px padding: room under the bottom row for its "G ↑" lane labels.
+    zoom = Math.max(getMinZoom(), zoomFor({ ...must, bottom: must.bottom + 4 }, 8, 30));
     region = must;
     panY = inset + 32 - must.top * zoom * BASE_CELL_SIZE;
   }
@@ -2375,7 +2376,7 @@ function positionChipMenu() {
   if (!chip) return;
   const rect = chip.getBoundingClientRect();
   const menu = elements.chipMenu.getBoundingClientRect();
-  const left = Math.max(8, Math.min(window.innerWidth - menu.width - 8, rect.left));
+  const left = Math.max(8, Math.min(document.documentElement.clientWidth - menu.width - 8, rect.left));
   const below = rect.bottom + 6 + menu.height <= window.innerHeight - 8;
   elements.chipMenu.style.left = `${Math.round(left)}px`;
   elements.chipMenu.style.top = `${Math.round(below ? rect.bottom + 6 : Math.max(8, rect.top - 6 - menu.height))}px`;
@@ -4088,7 +4089,7 @@ function createMasterworkCard(work) {
     + `<span class="card-meta">${escapeHtml(meta)}</span>`
     + `<span class="card-note">${escapeHtml(work.note)}</span>`
     + (loadable
-      ? `<span class="card-size">${loading ? 'Loading…' : `<span class="mono">${size}</span> cells · <span class="card-load">Load</span>`}</span>`
+      ? `<span class="card-size">${loading ? 'Loading…' : `<span class="mono">${size}</span> <span class="card-load-group">cells · <span class="card-load">Load</span></span>`}</span>`
       : `<span class="card-reason">${escapeHtml(work.reason || (size && `${size} cells.`) || '')}</span>`
         + `<a class="card-link" href="${escapeHtml(work.source?.url || '#')}" target="_blank" rel="noopener">Read about it<svg class="icon" aria-hidden="true"><use href="#i-external" /></svg></a>`);
   card.append(thumb, text);

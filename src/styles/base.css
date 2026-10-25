@@ -18,6 +18,8 @@
   --hover: rgba(22, 22, 22, 0.05);
   --active: rgba(22, 22, 22, 0.09);
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --switch-off: #dedbd2;
+  --switch-knob: #ffffff;
   --radius-sm: 6px;
   --radius: 10px;
   --font: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -51,6 +53,8 @@
   --hover: rgba(236, 236, 234, 0.06);
   --active: rgba(236, 236, 234, 0.11);
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --switch-off: #6b6b66;
+  --switch-knob: #ececea;
   color-scheme: dark;
 }
 
@@ -73,6 +77,8 @@
     --hover: rgba(236, 236, 234, 0.06);
     --active: rgba(236, 236, 234, 0.11);
     --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --switch-off: #6b6b66;
+  --switch-knob: #ececea;
     color-scheme: dark;
   }
 }
@@ -335,6 +341,16 @@ button:disabled {
 .icon-button[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* The theme toggle's pressed state is the moon glyph, not a filled tile. */
+#theme-toggle[aria-pressed="true"] {
+  background: transparent;
+  color: var(--text);
+}
+
+#theme-toggle[aria-pressed="true"]:hover {
+  background: var(--hover);
 }
 
 /* Theme toggle shows one glyph at a time */
@@ -759,8 +775,9 @@ kbd {
     bottom: calc(84px + env(safe-area-inset-bottom));
   }
 
-  /* Keep the toast clear of the circuit bar above the bottom controls. */
-  body[data-mode="studio"]:has(#circuit-bar:not([hidden])) .toast {
+  /* Keep the toast clear of the circuit bar above the bottom controls; an
+     open sheet's rule below wins and lifts it above the sheet instead. */
+  body:has(#circuit-bar:not([hidden])) .toast {
     bottom: calc(136px + env(safe-area-inset-bottom));
   }
 

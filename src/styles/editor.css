@@ -197,7 +197,12 @@ body[data-mode="studio"][data-studio-view="projects"] .project-header {
   color: var(--text);
 }
 
+.card-load-group {
+  white-space: nowrap;
+}
+
 .card-load {
+  white-space: nowrap;
   font-weight: 600;
   color: var(--accent);
 }
