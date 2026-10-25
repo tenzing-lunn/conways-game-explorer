@@ -1,11 +1,19 @@
 # Implementation status
 
-Updated 2026-09-13 after the T8 production release and live verification.
+Updated 2026-09-13 after the user's live playability correction request.
 
 Execution plan: [IMPLEMENTATION-HANDOFF.md](IMPLEMENTATION-HANDOFF.md).
 Accepted scope: [launch-product-spec.md](launch-product-spec.md).
 
 ## Current position
+
+**Post-release correction:** the user's playthrough request exposed visible
+defects missed by the earlier completion assessment. The corrections are live
+in Worker `2180e7ac-9b4f-4f6f-a60a-11c1fa075acf`, with four new live
+desktop/mobile regressions passing. See `playability-review.md`. This supersedes
+the earlier implication that only posting access remained; launch usability
+must be assessed from the actual experience. LinkedIn remains on hold until
+the user reviews and explicitly approves the final post.
 
 **R1 is approved by Astra on 2026-09-08.** T0 and its correction pass are complete.
 T1 through T6 are complete. The project owner confirmed permission to include
@@ -25,8 +33,10 @@ real Worker authentication and desktop/mobile database journeys pass. See
 `r3-review.md`. **T8 is complete:** production migrations 0002/0003 are applied,
 Worker version `c88e2698-d13f-42c9-838b-a9e82a438452` is live, the desktop and
 mobile two-user journey passes, fixtures are removed, and backup/rollback
-references are recorded in `t8-release.md`. Next is **R4 announcement review**;
-T9 remains paused.
+references are recorded in `t8-release.md`. **R4 correction rereview approves
+the final copy and real launch screenshot.** The user confirmed their personal
+LinkedIn identity. Posting access is the sole remaining blocker. See
+`r4-review.md`. T9 publication remains paused.
 
 | Task | Owner model | Status | Evidence |
 | --- | --- | --- | --- |
@@ -38,7 +48,7 @@ T9 remains paused.
 | T5 | Sol | Complete | Contextual account flow, staged guest claim, public routes/metadata, Community integration and browser coverage |
 | T6 | Luna | Complete | `user-help.md`, `credits.md`, `operations.md`, and held LinkedIn draft |
 | T7 | Sol | Complete; R3 corrections verified and rereview passed | `release-verification.md`; `r3-review.md` |
-| T8 | Sol | Complete; awaiting R4 | `t8-release.md`; live Worker/database/browser evidence |
+| T8 | Sol | Complete; R4 corrections pending | `t8-release.md`; `r4-review.md` |
 | T9 | Sol | Pending, posting access unresolved | No LinkedIn post created |
 
 ## Gate ledger
@@ -48,7 +58,7 @@ T9 remains paused.
 | R1 Contracts | Passed, 2026-09-08 | `integration-contracts.md`, baseline below | Astra approved after final corrections |
 | R2 Integrated experience | Passed requested rereview, 2026-09-12 | `r2-review.md` | Current-agent review requested by user; no separate model review claimed |
 | R3 Release readiness | Passed requested rereview, 2026-09-12 | `r3-review.md`, `release-verification.md` | Three defects corrected; actual Worker/DB/browser verification passed; no separate model review claimed |
-| R4 Announcement | Review needed | `t8-release.md`, `linkedin-launch-post.md` | Pending review of live claims and posting access |
+| R4 Announcement | Copy/image/identity ready; access blocked, 2026-09-13 | `r4-review.md`, `t8-release.md`, `linkedin-launch-post.md` | Personal account confirmed; supported sign-in/posting access unavailable |
 
 ## Evidence rules
 
