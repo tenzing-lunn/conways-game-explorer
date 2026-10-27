@@ -21,10 +21,20 @@ import { cleanBio, cleanDisplayName, cleanProfileUrl } from './profile-fields.mj
 // account from filling the shared database.
 export const USER_CREATION_LIMIT = 200;
 export const CREATION_VERSION_LIMIT = 500;
-export const USER_STORAGE_BYTES_LIMIT = 50_000_000;
+// 10 MB holds about 65 versions of the OTCA metapixel (150 KB each), 20 of a
+// 1000×1000 random soup (0.47 MB), or 5 of the largest board the database
+// accepts, a 2048×2048 soup (about 2 MB, importable from a guest project).
+export const USER_STORAGE_BYTES_LIMIT = 10_000_000;
 
 function limitReached(message) {
   return Object.assign(new Error(message), { status: 422, code: 'LIMIT_REACHED' });
+}
+
+// Every path that checks a per-account cap holds this lock for the rest of its
+// transaction, so concurrent requests cannot each pass the check. Take it
+// after any creation/import row locks to keep one lock order.
+export function lockAccount(client, userId) {
+  return client.query('select pg_advisory_xact_lock(hashtext($1))', [userId]);
 }
 
 export async function assertCreationAllowance(client, userId) {
@@ -43,7 +53,7 @@ export async function assertStorageAllowance(client, userId, addedBytes) {
         join public.creation_imports i on i.id = iv.import_id
         where i.owner_id = $1 and i.status = 'uploading'), 0) as bytes`, [userId]);
   if (Number(result.rows[0]?.bytes || 0) + Number(addedBytes || 0) > USER_STORAGE_BYTES_LIMIT) {
-    throw limitReached('This account has reached its 50 MB storage limit. Delete old projects to save more.');
+    throw limitReached(`This account has reached its ${USER_STORAGE_BYTES_LIMIT / 1_000_000} MB storage limit. Delete old projects to save more.`);
   }
 }
 
@@ -154,7 +164,7 @@ export function createPostgresCommunityRepository({
     const version = validateVersionInput({ ...creation.currentVersion, id: createId() }, { publication: publish });
 
     return remember(await withTransaction(async (client) => {
-      await client.query('select pg_advisory_xact_lock(hashtext($1))', [userId]);
+      await lockAccount(client, userId);
       if (fields.importKey) {
         const imported = await client.query('select id from public.creations where owner_id = $1 and import_key = $2',
           [userId, String(fields.importKey).slice(0, 200)]);
@@ -417,6 +427,7 @@ export function createPostgresCommunityRepository({
       const cloned = await withTransaction(async (client) => {
         const source = await loadCreation(client, creationId, { publicOnly: true });
         if (!source) return null;
+        await lockAccount(client, userId);
         await assertCreationAllowance(client, userId);
         await assertStorageAllowance(client, userId, rleBytes(source.currentVersion?.rle));
         const remixId = createId();
@@ -509,6 +520,7 @@ async function appendVersionRows(client, existing, version, userId) {
     [existing.id, userId],
   );
   if (!locked.rowCount) return null;
+  await lockAccount(client, userId);
   const latest = await client.query(
     `select count(*)::int as count, coalesce(max(version_number), 0) + 1 as next_number
        from public.creation_versions where creation_id = $1`,

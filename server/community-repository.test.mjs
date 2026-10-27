@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   CREATION_VERSION_LIMIT,
   USER_CREATION_LIMIT,
+  USER_STORAGE_BYTES_LIMIT,
   createPostgresCommunityRepository,
 } from './community-repository.mjs';
 
@@ -107,9 +108,25 @@ test('saveVersion enforces the per-project version limit', async () => {
     (error) => error.status === 422 && error.code === 'LIMIT_REACHED',
   );
   assert.equal(pool.queries.some((query) => /insert into public\.creation_versions/.test(query.text)), false);
+  const lock = pool.queries.findIndex((query) => /pg_advisory_xact_lock/.test(query.text) && query.values[0] === 'user-1');
+  const count = pool.queries.findIndex((query) => /count\(\*\)::int as count, coalesce/.test(query.text));
+  assert.ok(lock >= 0 && lock < count, 'the account lock is held before the version cap is checked');
 });
 
-function createTransactionPool({ creationCount = 0, versionCount = 0 } = {}) {
+test('saveVersion enforces the 10 MB per-account storage limit', async () => {
+  assert.equal(USER_STORAGE_BYTES_LIMIT, 10_000_000);
+  const pool = createTransactionPool({ creationCount: 1, versionCount: 1, storedBytes: USER_STORAGE_BYTES_LIMIT - 10 });
+  const repo = createPostgresCommunityRepository({ pool, userId: 'user-1' });
+
+  await assert.rejects(
+    repo.saveVersion('creation-1', {
+      rle: 'x = 40, y = 40, rule = B3/S23\no!', width: 40, height: 40, settings: { gridPreset: 'custom', width: 40, height: 40 },
+    }),
+    (error) => error.code === 'LIMIT_REACHED' && /10 MB/.test(error.message),
+  );
+});
+
+function createTransactionPool({ creationCount = 0, versionCount = 0, storedBytes = 0 } = {}) {
   const queries = [];
   const creationRow = {
     id: 'creation-1', owner_id: 'user-1', title: 'Glider', slug: 'glider-creation-1', visibility: 'private',
@@ -123,7 +140,7 @@ function createTransactionPool({ creationCount = 0, versionCount = 0 } = {}) {
     }
     if (/count\(\*\)::int as count from public\.creations/.test(text)) return { rows: [{ count: creationCount }] };
     if (/count\(\*\)::int as count, coalesce/.test(text)) return { rows: [{ count: versionCount, next_number: versionCount + 1 }] };
-    if (/as bytes/.test(text)) return { rows: [{ bytes: 0 }] };
+    if (/as bytes/.test(text)) return { rows: [{ bytes: storedBytes }] };
     if (/select c\.\*/.test(text)) return { rows: [{ ...creationRow, id: values[0] }], rowCount: 1 };
     if (/for update/.test(text)) return { rows: [{ id: values[0] }], rowCount: 1 };
     return { rows: [], rowCount: 0 };

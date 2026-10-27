@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createOwnerScopedSlug } from '../src/community.js';
 import { validateVersionInput } from './version-validation.mjs';
-import { CREATION_VERSION_LIMIT, assertCreationAllowance, assertStorageAllowance } from './community-repository.mjs';
+import {
+  CREATION_VERSION_LIMIT, assertCreationAllowance, assertStorageAllowance, lockAccount,
+} from './community-repository.mjs';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 export const digestImportValue = (value) => sha256(stableJson(value));
@@ -84,6 +86,7 @@ export function createCreationImports({ pool, userId, createId = randomUUID } = 
         let row = (await client.query('select * from public.creation_import_versions where import_id=$1 and local_version_id=$2 for update', [importId, localVersionId])).rows[0];
         if (!row) {
           if (offset !== 0) conflict('Resume offset does not match the uploaded version.');
+          await lockAccount(client, userId);
           await assertStorageAllowance(client, userId, totalBytes);
           row = (await client.query(`insert into public.creation_import_versions
             (import_id,local_version_id,total_bytes,content_digest,metadata)
@@ -151,6 +154,7 @@ export function createCreationImports({ pool, userId, createId = randomUUID } = 
             if (!entry || stableJson(entry) !== stableJson(old)) conflict('Imported history cannot be removed or changed.');
           }
         }
+        await lockAccount(client, userId);
         if (!existingCreation) await assertCreationAllowance(client, userId);
         const creationId = existingCreation?.id || createId();
         // The UUID suffix already makes the slug unique.
