@@ -3317,16 +3317,22 @@ function navigateTo(path, { replace = false, render = true } = {}) {
 
 async function routeCurrentLocation() {
   const path = window.location.pathname;
+  // A malformed escape such as /c/%E0%A4%A reads as a pattern that does not exist.
   const creationMatch = path.match(/^\/c\/([^/]+)$/);
-  if (creationMatch) { await openPublicCreationRoute(decodeURIComponent(creationMatch[1])); return; }
+  if (creationMatch) { await openPublicCreationRoute(decodePathPart(creationMatch[1])); return; }
   const profileMatch = path.match(/^\/u\/([^/]+)$/);
-  if (profileMatch) { await openCreatorRoute(decodeURIComponent(profileMatch[1]), { updateHistory: false }); return; }
+  const username = profileMatch && decodePathPart(profileMatch[1]);
+  if (username) { await openCreatorRoute(username, { updateHistory: false }); return; }
   const mode = getModeForPath(path);
   if (mode === 'community') {
     state.communityView = 'gallery';
     state.publicProfile = null;
   }
   setMode(mode);
+}
+
+function decodePathPart(value) {
+  try { return decodeURIComponent(value); } catch { return ''; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -3624,7 +3630,7 @@ async function openPublicCreationRoute(identifier) {
   elements.communityDetail.innerHTML = '<p class="community-status" role="status">Loading…</p>';
   try {
     let creation = findCommunityDesign(identifier);
-    if (!creation && communityAuth.cloudRepo?.getPublicCreation) creation = await communityAuth.cloudRepo.getPublicCreation(identifier);
+    if (!creation && identifier && communityAuth.cloudRepo?.getPublicCreation) creation = await communityAuth.cloudRepo.getPublicCreation(identifier);
     if (!creation || creation.visibility !== 'public') throw Object.assign(new Error('This pattern is unavailable or private.'), { status: 404 });
     state.publicCreations = [creation, ...state.publicCreations.filter((item) => item.id !== creation.id)];
     state.selectedCommunityId = creation.id;

@@ -47,3 +47,13 @@ test('Studio saves for this visit when IndexedDB is blocked', async ({ page, isM
   await page.locator('#projects-back').click();
   await expect(page.locator('#projects-list .project-card[data-project-id]')).toHaveCount(1);
 });
+
+test('a malformed escape in a pattern link shows the unavailable state', async ({ page }) => {
+  watchErrors(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    history.pushState({}, '', '/c/%E0%A4%A');
+    dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(page.locator('#community-detail')).toContainText('Pattern unavailable');
+});
