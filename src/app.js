@@ -991,12 +991,13 @@ function ownedSnapshot(board = state.board) {
 // edges to bounded, so its boards carry a `wrapping` tag that this wrapper
 // keeps in a parallel stack mirroring the history's push, pop and trim order
 // (anchored on entryCount so trimming stays in step). Undo then restores the
-// previous edge mode and Redo makes the board bounded again.
+// previous edge mode and Redo makes the board bounded again. The same tags
+// remember the circuit on each board, so Undo after Clear brings it back.
 function withEdgeMemory(history) {
   const tags = { undo: [], redo: [] };
   let order = 0;
   function push(stack, board) {
-    stack.push({ wrapping: board.wrapping, order: order += 1 });
+    stack.push({ wrapping: board.wrapping, circuit: board.circuit || null, order: order += 1 });
     while (tags.undo.length + tags.redo.length > history.entryCount) {
       const oldest = !tags.redo.length || (tags.undo.length && tags.undo[0].order < tags.redo[0].order) ? tags.undo : tags.redo;
       oldest.shift();
@@ -1004,6 +1005,7 @@ function withEdgeMemory(history) {
   }
   function tagged(board, entry) {
     if (entry?.wrapping !== undefined) board.wrapping = entry.wrapping;
+    if (entry) board.circuit = entry.circuit;
     return board;
   }
   return {
@@ -1054,9 +1056,16 @@ function beginAuthoringCommand({ rememberEdges = false } = {}) {
   }
   state.simulation?.cancel();
   loadSimulation();
-  const snapshot = ownedSnapshot();
+  const snapshot = historySnapshot();
   if (rememberEdges) snapshot.wrapping = state.designSettings.wrapping;
   state.history.record(snapshot);
+}
+
+// The board for the history, tagged with the circuit it carries (if any).
+function historySnapshot() {
+  const snapshot = ownedSnapshot();
+  if (state.circuitSpec) snapshot.circuit = state.circuitSpec;
+  return snapshot;
 }
 
 function finishAuthoringCommand({ keepSelection = false } = {}) {
@@ -1150,21 +1159,21 @@ function updateHistoryControls() {
 
 function undoBoard() {
   if (state.playing) return;
-  const previous = state.history.undo(ownedSnapshot());
+  const previous = state.history.undo(historySnapshot());
   if (!previous) return;
   restoreHistoryBoard(previous);
 }
 
 function redoBoard() {
   if (state.playing) return;
-  const next = state.history.redo(ownedSnapshot());
+  const next = state.history.redo(historySnapshot());
   if (!next) return;
   restoreHistoryBoard(next);
 }
 
 // A history entry may have a different size (a masterwork grew the board, or
 // the grid was resized); the settings and the view follow it.
-function restoreHistoryBoard(board) {
+function restoreHistoryBoard({ circuit, ...board }) {
   const resized = board.width !== state.board.width || board.height !== state.board.height;
   const edgesChanged = board.wrapping !== undefined && board.wrapping !== state.designSettings.wrapping;
   if (edgesChanged) state.designSettings = mergeDesignSettings(state.designSettings, { wrapping: board.wrapping });
@@ -1175,8 +1184,26 @@ function restoreHistoryBoard(board) {
     fitBoard();
   }
   if (resized || edgesChanged) syncDesignControls();
+  if (circuit && !state.circuitSpec) reattachCircuit(circuit);
+  else if (!circuit && state.circuitSpec) { exitCircuit(); renderInspector(); }
   markDesignDirty(true);
   updateHistoryControls();
+}
+
+// Undo can return to a board a circuit was cleared from. A circuit spec never
+// changes within one history (every edit rebuilds and clears it), so the
+// gates, switches and lamps come back on the restored cells as they were.
+function reattachCircuit(spec) {
+  closeChipMenu();
+  state.circuitSpec = spec;
+  state.circuit = buildSpec(spec);
+  state.circuitOutputs = null;
+  state.designSettings = mergeDesignSettings(state.designSettings, { wrapping: false });
+  loadSimulation(state.board, { wrapping: false });
+  syncDesignControls();
+  updatePresetSelection();
+  renderInspector();
+  renderCircuitBar();
 }
 
 function resetToStart() {

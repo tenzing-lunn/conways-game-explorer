@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { RECOVERY_KEY, clickBoard, openInspector, snapshot, watchErrors } from './helpers.js';
+import {
+  RECOVERY_KEY, clickBoard, closeSheets, openInspector, openMoreMenu, pickGate, snapshot, watchErrors,
+} from './helpers.js';
 
 test.afterEach(async ({ page }) => expect(page.errors).toEqual([]));
 
@@ -220,4 +222,29 @@ test('a reload straight after an edit keeps that edit', async ({ page, isMobile 
   // Inside the 500 ms recovery debounce.
   await page.reload();
   await expect(page.locator('#population')).toHaveText('2');
+});
+
+test('Undo after clearing a circuit brings the circuit back, and Redo clears it again', async ({ page, isMobile }) => {
+  watchErrors(page);
+  await page.goto('/studio');
+  await pickGate(page, isMobile, 'and');
+  const gate = await snapshot(page);
+  expect(gate.circuit).not.toBeNull();
+  await closeSheets(page, isMobile);
+  await openMoreMenu(page);
+  await page.locator('#clear-board').click();
+  await expect(page.locator('#population')).toHaveText('0');
+  expect((await snapshot(page)).circuit).toBeNull();
+
+  await page.locator('#undo').click();
+  await expect.poll(async () => (await snapshot(page)).circuit).toBe(gate.circuit);
+  expect((await snapshot(page)).population).toBe(gate.population);
+  await openInspector(page, isMobile);
+  await expect(page.locator('#circuit-section')).toBeVisible();
+  await expect(page.locator('#inputs-list [data-input]')).toHaveCount(2);
+  await closeSheets(page, isMobile);
+
+  await page.locator('#redo').click();
+  await expect.poll(async () => (await snapshot(page)).circuit).toBeNull();
+  await expect(page.locator('#circuit-section')).toBeHidden();
 });
