@@ -1,0 +1,23 @@
+# Checks the live site every 30 minutes. A failed run means the database is
+# unreachable or over 70% of its storage limit (see /api/health in
+# worker.mjs); GitHub emails the repository owner when a scheduled run fails.
+name: Live health check
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check /api/health
+        run: |
+          body=$(curl --silent --show-error --max-time 30 --retry 2 --retry-delay 20 \
+            --write-out '\n%{http_code}' https://conways-game-explorer.10zinglunn.workers.dev/api/health)
+          echo "$body"
+          test "$(echo "$body" | tail -n1)" = "200"

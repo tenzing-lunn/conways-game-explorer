@@ -155,3 +155,31 @@ test('Worker waits for asynchronous auth queries before ending its pool', async 
   await Promise.all(cleanup);
   assert.equal(ended, true);
 });
+
+test('Worker health check reports database reachability and storage pressure', async (t) => {
+  t.mock.method(Pool.prototype, 'end', async () => {});
+  t.mock.method(console, 'error', () => {});
+  const env = {
+    ASSETS: assets(),
+    DATABASE_URL: 'postgres://test:test@127.0.0.1:1/test',
+    BETTER_AUTH_SECRET: 'test-only-secret-at-least-thirty-two-characters',
+    DATABASE_STORAGE_LIMIT_BYTES: '1000',
+  };
+  const check = async () => {
+    const response = await worker.fetch(new Request('https://life.example/api/health'), env, { waitUntil() {} });
+    return { status: response.status, body: await response.json() };
+  };
+
+  const unconfigured = await worker.fetch(new Request('https://life.example/api/health'), { ASSETS: assets() }, { waitUntil() {} });
+  assert.equal(unconfigured.status, 503);
+
+  let bytes = '500';
+  const query = t.mock.method(Pool.prototype, 'query', async () => ({ rows: [{ bytes }] }));
+  assert.deepEqual(await check(), { status: 200, body: { ok: true, database: 'reachable', storage: 'ok', storageUsedPercent: 50 } });
+
+  bytes = '700';
+  assert.deepEqual(await check(), { status: 503, body: { ok: false, database: 'reachable', storage: 'high', storageUsedPercent: 70 } });
+
+  query.mock.mockImplementation(async () => { throw new Error('connection attempt failed'); });
+  assert.deepEqual(await check(), { status: 503, body: { ok: false, database: 'unreachable' } });
+});

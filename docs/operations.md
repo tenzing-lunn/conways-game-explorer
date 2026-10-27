@@ -180,8 +180,11 @@ select pg_size_pretty(pg_database_size(current_database())) as database,
        pg_size_pretty(pg_total_relation_size('public.creation_import_versions')) as import_uploads;
 ```
 
-Set a storage alert with the database provider (for example a Neon project
-storage or usage alert) at about 70% of the plan's limit, and a Cloudflare
-notification for Worker error-rate spikes, so a storage fill or an outage is
-noticed before writes start failing. The SQL in "Moderation SQL" above finds
+The storage and outage alert is built in. `GET /api/health` returns 503 when
+the database is unreachable or past 70% of `DATABASE_STORAGE_LIMIT_BYTES`
+(default 0.5 GB, Neon Free; set the Worker variable if the plan changes), and
+`.github/workflows/health.yml` polls it every 30 minutes. GitHub emails the
+repository owner when a scheduled run fails; run the workflow by hand from the
+Actions tab to test it. Optionally also add a Cloudflare notification for
+Worker error-rate spikes. The SQL in "Moderation SQL" above finds
 and disables the account responsible.

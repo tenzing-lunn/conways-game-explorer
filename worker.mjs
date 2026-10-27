@@ -39,7 +39,8 @@ function serviceUnavailable() {
 const AUTH_ATTEMPT_PATH = /^\/api\/auth\/(?:sign-in|sign-up)(?:\/|$)/;
 
 function rateLimiterFor(request, url, env) {
-  const community = url.pathname === '/api/community' || url.pathname.startsWith('/api/community/');
+  const community = url.pathname === '/api/community' || url.pathname.startsWith('/api/community/')
+    || url.pathname === '/api/health';
   if (request.method === 'GET' || request.method === 'HEAD') return community ? env.READ_RATE_LIMITER : null;
   if (AUTH_ATTEMPT_PATH.test(url.pathname)) return env.AUTH_RATE_LIMITER;
   if (community) return env.WRITE_RATE_LIMITER;
@@ -82,6 +83,32 @@ async function injectRuntimeConfig(response, env) {
   });
 }
 
+// Polled by .github/workflows/health.yml: 503 when the database is
+// unreachable or its storage passes 70% of the plan limit, so a failed
+// scheduled run emails the owner before writes start failing. Default limit
+// is Neon Free's 0.5 GB; set DATABASE_STORAGE_LIMIT_BYTES if the plan changes.
+const STORAGE_ALERT_RATIO = 0.7;
+
+async function health(pool, env) {
+  const respond = (status, body) => new Response(JSON.stringify(body), {
+    status,
+    headers: { 'cache-control': 'no-store', 'content-type': 'application/json; charset=utf-8' },
+  });
+  if (!pool) return respond(503, { ok: false, database: 'unconfigured' });
+  let bytes;
+  try {
+    const result = await pool.query('select pg_database_size(current_database())::bigint as bytes');
+    bytes = Number(result.rows[0]?.bytes);
+  } catch (error) {
+    console.error('Health check query failed:', error?.message || error);
+    return respond(503, { ok: false, database: 'unreachable' });
+  }
+  const limit = Number(env.DATABASE_STORAGE_LIMIT_BYTES) || 512 * 1024 * 1024;
+  const storageUsedPercent = Math.round((bytes / limit) * 100);
+  const ok = bytes < limit * STORAGE_ALERT_RATIO;
+  return respond(ok ? 200 : 503, { ok, database: 'reachable', storage: ok ? 'ok' : 'high', storageUsedPercent });
+}
+
 function notFound() {
   return new Response(NOT_FOUND_HTML, {
     status: 404,
@@ -106,6 +133,8 @@ function withSecurityHeaders(response) {
 
 async function route(request, env, url, services) {
   if (await isRateLimited(request, url, env)) return tooManyRequests();
+
+  if (url.pathname === '/api/health') return health(services.pool, env);
 
   const communityResponse = await handleCommunityFetchRequest({
     request,

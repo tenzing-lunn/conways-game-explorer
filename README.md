@@ -77,3 +77,7 @@ node --check worker.mjs
 The Playwright suite covers the three workspaces in desktop Chromium and an
 iPhone-sized Chromium viewport. Install its browser runtime once with
 `npx playwright install chromium`.
+
+## License
+
+Code is MIT licensed; see [LICENSE](LICENSE). Bundled pattern data from LifeWiki and the CakeML gate coordinates keep their own terms, listed there and in [docs/credits.md](docs/credits.md).
