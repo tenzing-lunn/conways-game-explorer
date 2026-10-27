@@ -4972,6 +4972,15 @@ function bindEvents() {
   });
 }
 
+// The shortcut list is written with Mac keys; elsewhere ⌘ reads as Ctrl.
+function labelShortcutKeys() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || '';
+  if (/mac|iphone|ipad|ipod/i.test(platform)) return;
+  for (const key of elements.shortcutsDialog.querySelectorAll('kbd')) {
+    key.textContent = key.textContent.replace('⇧⌘', 'Ctrl+Shift+').replace(/⌘(?=\S)/, 'Ctrl+').replace('⌘', 'Ctrl');
+  }
+}
+
 /* ---------------------------------------------------------------------------
  * Loop and boot
  * ------------------------------------------------------------------------- */
@@ -5006,6 +5015,7 @@ async function boot() {
   applyTheme(getCurrentTheme(), { persist: false });
   setSpeed(state.speed);
   setZoom(1);
+  labelShortcutKeys();
   bindEvents();
 
   const glider = findPreset('glider');

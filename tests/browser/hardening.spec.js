@@ -248,3 +248,16 @@ test('Undo after clearing a circuit brings the circuit back, and Redo clears it 
   await expect.poll(async () => (await snapshot(page)).circuit).toBeNull();
   await expect(page.locator('#circuit-section')).toBeHidden();
 });
+
+for (const [platform, expected] of [['Win32', ['Ctrl+Z', 'Ctrl+Shift+Z', 'Ctrl+C', 'Ctrl + scroll']], ['MacIntel', ['⌘Z', '⇧⌘Z', '⌘C', '⌘ + scroll']]]) {
+  test(`the shortcut list names the right modifier on ${platform}`, async ({ page }) => {
+    watchErrors(page);
+    await page.addInitScript((platform) => {
+      Object.defineProperty(navigator, 'platform', { get: () => platform });
+      Object.defineProperty(navigator, 'userAgentData', { get: () => undefined });
+    }, platform);
+    await page.goto('/');
+    const text = (await page.locator('#shortcuts-dialog .shortcut-list').textContent()).replace(/\s+/g, ' ');
+    for (const label of expected) expect(text).toContain(label);
+  });
+}
