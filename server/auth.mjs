@@ -2,6 +2,16 @@ import { Pool } from 'pg';
 import { betterAuth } from 'better-auth';
 import { toNodeHandler } from 'better-auth/node';
 import { dash } from '@better-auth/infra';
+import { cleanDisplayName, cleanProfileUrl } from './profile-fields.mjs';
+
+// Sign-up accepts any `name`/`image`; bound them before they become a
+// profile display name or avatar.
+function boundAuthUser(user) {
+  const data = {};
+  if (user?.name !== undefined) data.name = cleanDisplayName(user.name) || 'Member';
+  if (user?.image !== undefined && user.image !== null) data.image = cleanProfileUrl(user.image) || null;
+  return { data };
+}
 
 export function getDatabaseConnectionString(env = process.env) {
   return env.DATABASE_URL || env.HYPERDRIVE?.connectionString || null;
@@ -15,6 +25,8 @@ export function createPostgresPool({ env = process.env } = {}) {
     connectionString,
     max: Number(env.DATABASE_POOL_MAX || 5),
     idleTimeoutMillis: Number(env.DATABASE_IDLE_TIMEOUT_MS || 30_000),
+    // Fail fast during a database outage instead of holding the request open.
+    connectionTimeoutMillis: Number(env.DATABASE_CONNECT_TIMEOUT_MS || 5_000),
     // Keep Better Auth's custom table names in public. Passing a search_path
     // via PostgreSQL startup options is rejected by Neon pooler endpoints and
     // is unnecessary when every application query is fully qualified.
@@ -73,11 +85,31 @@ export function createBetterAuth({
       minPasswordLength: 12,
       maxPasswordLength: 128,
     },
+    // Enabled explicitly: Better Auth's default reads NODE_ENV from
+    // process.env at import time, which the Worker never sets. Memory storage
+    // is per isolate; the Worker's Cloudflare rate-limit binding is the
+    // cross-isolate guard in front of it.
+    rateLimit: {
+      enabled: true,
+      storage: 'memory',
+      window: 60,
+      max: 100,
+      customRules: {
+        '/sign-in/*': { window: 60, max: 10 },
+        '/sign-up/*': { window: 3600, max: 10 },
+      },
+    },
     advanced: {
       // Cloudflare sets this header at the edge; retain the usual proxy header
       // as a local-development fallback for Better Auth's rate limiter.
       ipAddress: {
         ipAddressHeaders: ['cf-connecting-ip', 'x-forwarded-for'],
+      },
+    },
+    databaseHooks: {
+      user: {
+        create: { before: async (user) => boundAuthUser(user) },
+        update: { before: async (user) => boundAuthUser(user) },
       },
     },
     user: {

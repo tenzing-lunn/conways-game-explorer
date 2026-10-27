@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   archiveCreation as applyArchive,
   assertCreationPublishReady,
@@ -15,6 +15,39 @@ import {
   updateCreationMetadata as applyMetadataUpdate,
 } from '../src/community.js';
 import { validateVersionInput } from './version-validation.mjs';
+import { cleanBio, cleanDisplayName, cleanProfileUrl } from './profile-fields.mjs';
+
+// Per-account ceilings. Sign-up has no email verification, so these keep one
+// account from filling the shared database.
+export const USER_CREATION_LIMIT = 200;
+export const CREATION_VERSION_LIMIT = 500;
+export const USER_STORAGE_BYTES_LIMIT = 50_000_000;
+
+function limitReached(message) {
+  return Object.assign(new Error(message), { status: 422, code: 'LIMIT_REACHED' });
+}
+
+export async function assertCreationAllowance(client, userId) {
+  const result = await client.query('select count(*)::int as count from public.creations where owner_id = $1', [userId]);
+  if (Number(result.rows[0]?.count || 0) >= USER_CREATION_LIMIT) {
+    throw limitReached(`Accounts can keep up to ${USER_CREATION_LIMIT} projects. Delete one to save another.`);
+  }
+}
+
+// Counts saved versions plus unfinished guest-import uploads.
+export async function assertStorageAllowance(client, userId, addedBytes) {
+  const result = await client.query(`select
+      coalesce((select sum(octet_length(v.rle)) from public.creation_versions v
+        join public.creations c on c.id = v.creation_id where c.owner_id = $1), 0)
+    + coalesce((select sum(iv.total_bytes) from public.creation_import_versions iv
+        join public.creation_imports i on i.id = iv.import_id
+        where i.owner_id = $1 and i.status = 'uploading'), 0) as bytes`, [userId]);
+  if (Number(result.rows[0]?.bytes || 0) + Number(addedBytes || 0) > USER_STORAGE_BYTES_LIMIT) {
+    throw limitReached('This account has reached its 50 MB storage limit. Delete old projects to save more.');
+  }
+}
+
+const rleBytes = (rle) => Buffer.byteLength(String(rle || ''), 'utf8');
 
 export function createPostgresCommunityRepository({
   pool,
@@ -79,6 +112,15 @@ export function createPostgresCommunityRepository({
     }
   };
 
+  // A username derived from a display name must not collide with another
+  // member's, or the second "Ada Lovelace" could never finish account setup.
+  const availableUsername = async (base) => {
+    const clean = String(base || '').slice(0, 40).replace(/-+$/, '') || 'member';
+    const taken = await pool.query('select 1 from public.profiles where lower(username) = $1 and id <> $2', [clean, userId]);
+    if (!taken.rowCount && clean.length >= 3) return clean;
+    return `${clean.slice(0, 33).replace(/-+$/, '')}-${randomBytes(3).toString('hex')}`;
+  };
+
   const remember = (creation) => {
     if (!creation) return null;
     state = {
@@ -102,23 +144,24 @@ export function createPostgresCommunityRepository({
       assertCreationPublishReady({ ...input, currentVersion: { rle: input?.rle } });
     }
     const id = createId();
+    // Lineage is only recorded by the remix and import routes, never taken
+    // from a create body.
+    const { parentCreation, remixedFromId, rootCreationId, ...fields } = input || {};
+    // The UUID suffix already makes the slug unique.
+    const slug = `${createOwnerScopedSlug(fields.title, []).slice(0, 95)}-${id}`;
+    const draft = createCreationDraft({ ...fields, id, slug, profile: state.profile, now });
+    const creation = publish ? applyPublish(draft, { now }) : draft;
+    const version = validateVersionInput({ ...creation.currentVersion, id: createId() }, { publication: publish });
 
     return remember(await withTransaction(async (client) => {
       await client.query('select pg_advisory_xact_lock(hashtext($1))', [userId]);
-      if (input.importKey) {
+      if (fields.importKey) {
         const imported = await client.query('select id from public.creations where owner_id = $1 and import_key = $2',
-          [userId, String(input.importKey).slice(0, 200)]);
+          [userId, String(fields.importKey).slice(0, 200)]);
         if (imported.rows[0]) return loadOwnedCreation(client, imported.rows[0].id, { includeVersions: true });
       }
-      const slugRows = await client.query('select slug from public.creations');
-      const baseSlug = createOwnerScopedSlug(input?.title, slugRows.rows.map((row) => row.slug));
-      const slug = `${baseSlug.slice(0, 95)}-${id}`;
-      const draft = createCreationDraft({ ...input, id, slug, profile: state.profile, now });
-      const creation = publish ? applyPublish(draft, { now }) : draft;
-      const version = normalizeVersionForDatabase({
-        ...creation.currentVersion,
-        id: createId(),
-      });
+      await assertCreationAllowance(client, userId);
+      await assertStorageAllowance(client, userId, rleBytes(version.rle));
       await client.query(`
         insert into public.creations (
           id, owner_id, slug, title, description, tags, attribution,
@@ -147,8 +190,8 @@ export function createPostgresCommunityRepository({
         creation.publishReadiness, id, userId,
         publish ? version.id : null,
         publish ? publicationMetadata(creation) : null]);
-      if (input.importKey) await client.query('update public.creations set import_key = $1 where id = $2',
-        [String(input.importKey).slice(0, 200), id]);
+      if (fields.importKey) await client.query('update public.creations set import_key = $1 where id = $2',
+        [String(fields.importKey).slice(0, 200), id]);
       return loadOwnedCreation(client, id, { includeVersions: true });
     }));
   };
@@ -200,13 +243,16 @@ export function createPostgresCommunityRepository({
       if (!userResult.rows[0]) throw new Error('Authenticated Better Auth user was not found.');
       const user = userResult.rows[0];
       const draft = createProfile({
-        ...input,
         email: input?.email || user.email,
-        displayName: input?.displayName || user.name,
-        avatarUrl: input?.avatarUrl || user.image || '',
+        displayName: cleanDisplayName(input?.displayName) || cleanDisplayName(user.name),
+        avatarUrl: cleanProfileUrl(input?.avatarUrl || user.image),
+        bio: cleanBio(input?.bio),
+        githubUrl: cleanProfileUrl(input?.githubUrl),
+        linkedinUrl: cleanProfileUrl(input?.linkedinUrl),
         now,
       });
-      const requestedUsername = String(input?.username || user.username || draft.username).trim().toLowerCase();
+      const requestedUsername = String(input?.username || user.username || await availableUsername(draft.username))
+        .trim().toLowerCase();
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(requestedUsername) || requestedUsername.length < 3 || requestedUsername.length > 40) {
         throw Object.assign(new Error('Username must use 3 to 40 lowercase letters, numbers, or single hyphens.'), {
           status: 422, code: 'INVALID_USERNAME',
@@ -308,7 +354,6 @@ export function createPostgresCommunityRepository({
         const existing = await loadOwnedCreation(client, creationId, { includeVersions: true });
         if (!existing || existing.archivedAt) return null;
         validateVersionInput(existing.currentVersion, { publication: true });
-        validateVersionInput(existing.currentVersion, { publication: true });
         const next = applyPublish(existing, { now });
         const metadata = publicationMetadata(next);
         await client.query(`update public.creations set visibility='public', published_at=$1,
@@ -372,6 +417,8 @@ export function createPostgresCommunityRepository({
       const cloned = await withTransaction(async (client) => {
         const source = await loadCreation(client, creationId, { publicOnly: true });
         if (!source) return null;
+        await assertCreationAllowance(client, userId);
+        await assertStorageAllowance(client, userId, rleBytes(source.currentVersion?.rle));
         const remixId = createId();
         const draft = buildRemix(source, { id: remixId, profile: state.profile, now });
         draft.slug = `${createOwnerScopedSlug(draft.title, []).slice(0, 95)}-${remixId}`;
@@ -463,9 +510,14 @@ async function appendVersionRows(client, existing, version, userId) {
   );
   if (!locked.rowCount) return null;
   const latest = await client.query(
-    'select coalesce(max(version_number), 0) + 1 as next_number from public.creation_versions where creation_id = $1',
+    `select count(*)::int as count, coalesce(max(version_number), 0) + 1 as next_number
+       from public.creation_versions where creation_id = $1`,
     [existing.id],
   );
+  if (Number(latest.rows[0].count || 0) >= CREATION_VERSION_LIMIT) {
+    throw limitReached(`A project can keep up to ${CREATION_VERSION_LIMIT} saved versions. Start a new project to keep saving.`);
+  }
+  await assertStorageAllowance(client, userId, rleBytes(version.rle));
   const versionNumber = Number(latest.rows[0].next_number);
   await client.query(`
     insert into public.creation_versions (
