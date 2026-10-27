@@ -3947,24 +3947,41 @@ function getCurrentCreationPreviewConfig() {
   return state.circuitSpec ? { ...config, circuit: getCircuitSpec() } : config;
 }
 
+// Opens a #build= link (at boot, or pasted into an open tab) as a new Studio
+// project. Unsaved Studio work is only replaced after the visitor agrees.
 function importSharedBuildFromHash() {
   const shared = decodeShareLink(window.location.hash);
   if (!shared) return;
+  // Drop the hash so a reload does not open the link again.
+  window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search);
+  const studio = state.boardOwner === 'studio' ? state : state.workspaces.studio;
+  if (studio?.designDirty && !window.confirm('Open the shared pattern? It replaces your unsaved Studio work.')) return;
 
   try {
     const pattern = parseRle(shared.rle);
+    const bounds = getPatternBounds(pattern.coordinates);
     swapWorkspace('studio');
-    state.board = clearBoard(state.board);
-    state.board = placePattern(state.board, pattern.coordinates, 0, 0);
+    // A pattern larger than the default board gets a board that holds it
+    // (within the grid limits) instead of wrapping onto itself.
+    const fits = bounds.width <= DEFAULT_DESIGN_SETTINGS.width && bounds.height <= DEFAULT_DESIGN_SETTINGS.height;
+    state.designSettings = fits ? DEFAULT_DESIGN_SETTINGS : createDesignSettings({
+      gridPreset: 'custom',
+      width: Math.max(DEFAULT_DESIGN_SETTINGS.width, bounds.width + 24),
+      height: Math.max(DEFAULT_DESIGN_SETTINGS.height, bounds.height + 24),
+    });
+    const { width, height } = state.designSettings;
+    replaceBoard(placePattern(createBoard(width, height), pattern.coordinates,
+      Math.floor((width - bounds.width) / 2) - bounds.minX, Math.floor((height - bounds.height) / 2) - bounds.minY));
     state.authoredStart = ownedSnapshot();
-    loadSimulation();
     fitLiveCells({ deferred: true });
-    updateStats();
     startProject({ title: shared.title || 'Shared pattern', boardLoaded: true });
     setProjectFields({ title: shared.title, description: shared.description, tags: shared.tags });
     markDesignDirty(true);
     navigateTo('/studio', { replace: true });
-    showToast(shared.ownerName ? `Opened a pattern shared by ${shared.ownerName}` : 'Opened a shared pattern', { kind: 'success' });
+    // The owner name is unverified text from the link: keep it short.
+    const owner = String(shared.ownerName || '').replace(/\s+/g, ' ').trim();
+    const sharer = owner.length > 40 ? `${owner.slice(0, 39)}…` : owner;
+    showToast(sharer ? `Opened a pattern shared by ${sharer}` : 'Opened a shared pattern', { kind: 'success' });
   } catch {
     showToast('That share link could not be opened', { kind: 'error' });
   }
@@ -4695,6 +4712,7 @@ function bindEvents() {
   elements.modeCommunity.addEventListener('click', () => { state.communityView = 'gallery'; state.publicProfile = null; navigateTo('/community'); });
   $('#brand').addEventListener('click', (event) => { event.preventDefault(); navigateTo('/'); });
   window.addEventListener('popstate', routeCurrentLocation);
+  window.addEventListener('hashchange', importSharedBuildFromHash);
 
   // Rail
   elements.patternSearch.addEventListener('input', () => {
