@@ -860,6 +860,13 @@ async function submitAccountDialog() {
     else await communityAuth.cloudRepo.signInWithEmail({ email: validation.email, password: input.password });
     elements.accountPassword.value = '';
     await refreshCommunitySession(mode === 'sign-up' ? 'account created' : 'signed in');
+    if (!isCloudCommunityActive()) {
+      // Sync failed and projects stayed local; the queued action resumes once
+      // a later load activates the account, as it does on boot.
+      elements.accountOutput.textContent = `${communityAuth.message} Your projects are safe on this device; reload to try again.`;
+      elements.accountOutput.className = 'account-output error';
+      return;
+    }
     elements.accountOutput.textContent = 'Account ready.';
     elements.accountOutput.className = 'account-output success';
     await resumePendingAccountAction();
@@ -5089,6 +5096,10 @@ async function boot() {
   initializeCommunityBackend().then(() => {
     const path = window.location.pathname;
     if (/^\/(c|u)\//.test(path) || state.mode === 'community') routeCurrentLocation();
+    // Studio routed before the account loaded and fell back to a blank
+    // project; open the member's active project if nothing was touched.
+    else if (state.mode === 'studio' && !state.session?.creationId && !state.designDirty
+      && communityState.activeCreationId) openProject(communityState.activeCreationId);
   });
   requestAnimationFrame(loop);
 }

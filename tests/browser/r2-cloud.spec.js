@@ -37,8 +37,10 @@ test('failed activation retains the guest ID and edits; retry publishes once wit
   await page.locator('#account-email').fill(email);
   await page.locator('#account-password').fill('a-long-browser-test-password');
   await page.locator('#account-submit').click();
-  await expect(page.locator('#account-output')).toContainText('Migration paused', { timeout: 30_000 });
+  await expect(page.locator('#account-output')).toContainText('Sync paused', { timeout: 30_000 });
   await page.locator('#account-close').click();
+  // On a phone the inspector sheet is still open over the toolbar; close it.
+  if (await page.locator('#sheet-backdrop').isVisible()) await page.locator('#sheet-backdrop').click({ position: { x: 10, y: 10 } });
   await page.locator('#save-project').click();
   await expect(page.locator('#save-state')).toHaveAttribute('data-status', 'saved');
   const retained = await page.evaluate(async (localId) => {
