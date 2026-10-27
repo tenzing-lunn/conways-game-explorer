@@ -4932,11 +4932,11 @@ function bindEvents() {
       return;
     }
     if (state.mode === 'community' || (state.mode === 'studio' && state.studioView === 'projects')) return;
-    // A focused button, link or menu item keeps its own keys: Space presses it
-    // and arrows move within it. Letter shortcuts still work after a click.
+    // A focused button, link or menu item keeps its activation keys: Space
+    // presses it. Letters and arrows still work after a click on a command.
     const control = target instanceof Element
       && target.closest('button, a[href], summary, [role="button"], [role="menuitem"], [role="tab"], [role="switch"]');
-    if (control && [' ', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    if (control && (event.key === ' ' || event.key === 'Enter')) return;
 
     if (event.key === ' ') { event.preventDefault(); setPlaying(!state.playing); return; }
     if (meta && key === 'z') { event.preventDefault(); if (event.shiftKey) redoBoard(); else undoBoard(); return; }
