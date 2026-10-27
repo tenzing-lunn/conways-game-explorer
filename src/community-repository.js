@@ -1063,12 +1063,24 @@ function stripTrailingSlash(value) {
 }
 
 async function requestJson(fetchImpl, url, { method = 'GET', body } = {}) {
-  const response = await fetchImpl(url, {
-    method,
-    credentials: 'same-origin',
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  // Reads give up after 15 s so a hung request ends in an error state instead
+  // of "Loading…" forever; writes (large imports on slow links) are left alone.
+  const signal = method === 'GET' && typeof AbortSignal?.timeout === 'function'
+    ? AbortSignal.timeout(15000)
+    : undefined;
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method,
+      credentials: 'same-origin',
+      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
+    });
+  } catch (error) {
+    if (error?.name === 'TimeoutError') throw new Error('Community request timed out.');
+    throw error;
+  }
   const text = await response.text();
   const data = text ? parseJsonResponse(text) : null;
   if (!response.ok) {

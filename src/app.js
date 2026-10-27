@@ -4094,7 +4094,8 @@ function importSharedBuildFromHash() {
     // bidi/format characters, keep it short, and quote it so a sentence
     // smuggled into it still reads as a name.
     const owner = String(shared.ownerName || '').replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').trim();
-    const sharer = owner.length > 40 ? `${owner.slice(0, 39)}…` : owner;
+    const ownerChars = Array.from(owner);
+    const sharer = ownerChars.length > 40 ? `${ownerChars.slice(0, 39).join('')}…` : owner;
     showToast(sharer ? `Opened a pattern shared by “${sharer}”` : 'Opened a shared pattern', { kind: 'success' });
   } catch {
     showToast('That share link could not be opened', { kind: 'error' });

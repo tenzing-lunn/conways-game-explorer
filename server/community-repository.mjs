@@ -427,6 +427,9 @@ export function createPostgresCommunityRepository({
       const cloned = await withTransaction(async (client) => {
         const source = await loadCreation(client, creationId, { publicOnly: true });
         if (!source) return null;
+        // The remix trigger updates the source row; lock it before the account
+        // lock so a self-remix cannot deadlock with a save of the same creation.
+        await client.query('select id from public.creations where id = $1 for update', [source.id]);
         await lockAccount(client, userId);
         await assertCreationAllowance(client, userId);
         await assertStorageAllowance(client, userId, rleBytes(source.currentVersion?.rle));
