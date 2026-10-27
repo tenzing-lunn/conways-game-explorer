@@ -1812,7 +1812,7 @@ function renderProjectsPage() {
     const updated = formatDate(creation.updatedAt);
     button.innerHTML = `
       <strong>${escapeHtml(creation.title)}</strong>
-      <span>${formatCellCount(creation.currentVersion?.population)} · ${creation.currentVersion?.width || 0} × ${creation.currentVersion?.height || 0}</span>
+      <span>${formatCellCount(creation.currentVersion?.population)} · ${wholeNumber(creation.currentVersion?.width)} × ${wholeNumber(creation.currentVersion?.height)}</span>
       <span>${creation.visibility === 'public' ? 'Published' : 'Private'} · updated ${escapeHtml(updated)}</span>
     `;
     elements.projectsList.append(button);
@@ -1838,7 +1838,7 @@ function renderVersionHistory(creation) {
     const current = version.id === creation.currentVersion?.id;
     row.className = `version-row${current ? ' current' : ''}`;
     row.innerHTML = `
-      <span><strong>Version ${version.versionNumber || 1}</strong><small>${current ? 'Current' : formatCellCount(version.population)}</small></span>
+      <span><strong>Version ${wholeNumber(version.versionNumber) || 1}</strong><small>${current ? 'Current' : formatCellCount(version.population)}</small></span>
       ${current ? '' : `<button class="button button-small" type="button" data-restore-version-id="${escapeHtml(version.id)}">Restore</button>`}
     `;
     elements.versionHistory.append(row);
@@ -2262,7 +2262,7 @@ function renderInspector() {
     const listed = gates.length > 1 ? `${gates.slice(0, -1).join(', ')} and ${gates.at(-1)}` : gates[0] || '';
     const row = document.createElement('label');
     row.className = 'switch-row';
-    row.innerHTML = `<span>${name.toUpperCase()}<small>${escapeHtml(listed ? `feeds ${listed}` : '')}</small></span><input class="switch" type="checkbox" role="switch" data-input="${name}" aria-label="Input ${name.toUpperCase()}" ${spec.inputs[name] ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
+    row.innerHTML = `<span>${escapeHtml(name.toUpperCase())}<small>${escapeHtml(listed ? `feeds ${listed}` : '')}</small></span><input class="switch" type="checkbox" role="switch" data-input="${escapeHtml(name)}" aria-label="Input ${escapeHtml(name.toUpperCase())}" ${spec.inputs[name] ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
     elements.inputsList.append(row);
   }
   // Explain once why a lane may enter a gate from below or the side.
@@ -2274,7 +2274,7 @@ function renderInspector() {
     const lampState = getLampState(output);
     const row = document.createElement('div');
     row.className = 'lamp-row';
-    row.innerHTML = `<span>${escapeHtml(outputLabel(port))}</span><span class="lamp" data-output="${port.id}" data-state="${lampState}">${getLampLabel(lampState)}</span>`;
+    row.innerHTML = `<span>${escapeHtml(outputLabel(port))}</span><span class="lamp" data-output="${escapeHtml(port.id)}" data-state="${lampState}">${getLampLabel(lampState)}</span>`;
     elements.outputsList.append(row);
   }
 
@@ -2318,11 +2318,11 @@ function circuitLimitNote(attempt) {
 
 function formulaHtml(node, outputIndex, path, disabled) {
   const chip = (kind, label, extra) => `<button class="chip chip-${kind}" type="button" data-chip="${kind}" data-output="${outputIndex}" data-path="${path.join('.')}" ${extra} aria-haspopup="menu" aria-expanded="false"${disabled}>${label}<svg class="icon chip-caret" aria-hidden="true"><use href="#i-chevron" /></svg></button>`;
-  if (isInputNode(node)) return chip('input', node.input.toUpperCase(), `data-input="${node.input}"`);
+  if (isInputNode(node)) return chip('input', escapeHtml(node.input.toUpperCase()), `data-input="${escapeHtml(node.input)}"`);
   const operand = (child, step) => (isInputNode(child)
     ? formulaHtml(child, outputIndex, [...path, step], disabled)
     : `<span class="formula-paren" aria-hidden="true">(</span>${formulaHtml(child, outputIndex, [...path, step], disabled)}<span class="formula-paren" aria-hidden="true">)</span>`);
-  const gate = chip('gate', node.gate.toUpperCase(), `data-gate="${node.gate}"`);
+  const gate = chip('gate', escapeHtml(node.gate.toUpperCase()), `data-gate="${escapeHtml(node.gate)}"`);
   if (node.gate === 'not') return `${gate}${operand(node.a, 'a')}`;
   return `${operand(node.a, 'a')}${gate}${operand(node.b, 'b')}`;
 }
@@ -2439,7 +2439,7 @@ function renderCircuitBar() {
   if (!experiment) return;
   elements.circuitBarLamps.innerHTML = experiment.outputs.map((port) => {
     const lampState = getLampState(state.circuitOutputs?.find((candidate) => candidate.id === port.id) || null);
-    return `<span class="bar-lamp" data-bar-output="${port.id}"><span class="bar-lamp-name">${escapeHtml(outputLabel(port))}</span>`
+    return `<span class="bar-lamp" data-bar-output="${escapeHtml(port.id)}"><span class="bar-lamp-name">${escapeHtml(outputLabel(port))}</span>`
       + `<span class="lamp" data-state="${lampState}">${getLampLabel(lampState)}</span></span>`;
   }).join('');
   const filling = state.circuitRunning && state.truthRows?.current > 0;
@@ -2460,7 +2460,7 @@ function renderTruthTable() {
   const rows = measured
     ? state.truthRows.rows
     : getInputCombinations(inputNames).map((inputs) => ({ inputs, outputs: null }));
-  const header = `<tr>${inputNames.map((name) => `<th scope="col">${name.toUpperCase()}</th>`).join('')}${outputs.map((port) => `<th scope="col">${escapeHtml(outputLabel(port))}</th>`).join('')}</tr>`;
+  const header = `<tr>${inputNames.map((name) => `<th scope="col">${escapeHtml(name.toUpperCase())}</th>`).join('')}${outputs.map((port) => `<th scope="col">${escapeHtml(outputLabel(port))}</th>`).join('')}</tr>`;
   const body = rows.map((row) => `<tr>${inputNames.map((name) => `<td>${row.inputs[name] ? 1 : 0}</td>`).join('')}${outputs.map((port) => {
     const output = row.outputs?.find((candidate) => candidate.id === port.id);
     if (!output) return '<td class="pending">·</td>';
@@ -3137,7 +3137,8 @@ function drawArrowHead(x, y, angle) {
   ctx.restore();
 }
 
-function plural(count, singular, pluralForm = `${singular}s`) {
+function plural(value, singular, pluralForm = `${singular}s`) {
+  const count = wholeNumber(value);
   return `${count.toLocaleString()} ${count === 1 ? singular : pluralForm}`;
 }
 
@@ -3517,15 +3518,20 @@ function getCommunityPreviewHtml(creation) {
 function getPreviewGridHtml(preview) {
   // Every preview is padded onto the same 24 x 16 field (the largest a preview
   // is downsampled to), so cells are the same size on every card.
-  const sourceColumns = Number(preview?.grid?.columns || 6);
-  const sourceRows = Number(preview?.grid?.rows || 5);
+  // Stored previews are untrusted: only whole-number cells inside the grid
+  // reach the markup.
+  const sourceColumns = Math.min(24, wholeNumber(preview?.grid?.columns) || 6);
+  const sourceRows = Math.min(16, wholeNumber(preview?.grid?.rows) || 5);
   const columns = Math.max(24, sourceColumns);
   const rows = Math.max(16, sourceRows);
   const offsetX = Math.floor((columns - sourceColumns) / 2);
   const offsetY = Math.floor((rows - sourceRows) / 2);
+  const cells = (Array.isArray(preview?.cells) ? preview.cells : [])
+    .filter((cell) => Array.isArray(cell) && Number.isInteger(cell[0]) && Number.isInteger(cell[1])
+      && cell[0] >= 0 && cell[1] >= 0 && cell[0] < sourceColumns && cell[1] < sourceRows);
   return `
     <span class="preview-grid" aria-hidden="true" style="--preview-cols:${columns};--preview-rows:${rows}">
-      ${(preview?.cells || []).map(([x, y]) => `<span style="grid-column:${x + offsetX + 1};grid-row:${y + offsetY + 1}"></span>`).join('')}
+      ${cells.map(([x, y]) => `<span style="grid-column:${x + offsetX + 1};grid-row:${y + offsetY + 1}"></span>`).join('')}
     </span>
   `;
 }
@@ -3584,7 +3590,7 @@ function renderCommunityDetail(creation) {
         <div class="detail-tags" id="detail-tags">${(creation.tags || []).map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>
         <div class="detail-meta">
           <span>${formatCellCount(creation.currentVersion?.population)}</span>
-          <span>${creation.currentVersion?.width || 0} × ${creation.currentVersion?.height || 0}</span>
+          <span>${wholeNumber(creation.currentVersion?.width)} × ${wholeNumber(creation.currentVersion?.height)}</span>
           ${famous ? '' : `<span>${plural(creation.starCount || 0, 'star')}</span><span>${plural(creation.cloneCount || 0, 'remix', 'remixes')}</span>`}
         </div>
         <div class="detail-actions">
@@ -4449,7 +4455,14 @@ function escapeHtml(value) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// A number for markup: anything that is not a finite number becomes 0.
+function wholeNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.trunc(number) : 0;
 }
 
 /* ---------------------------------------------------------------------------

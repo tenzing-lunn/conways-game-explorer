@@ -138,3 +138,48 @@ test('publish problems show on screen, including on a phone', async ({ page, isM
   await expect(toast).toBeInViewport();
   expect(await toastOnTop(page)).toBe(true);
 });
+
+// Writes one record straight into a local IndexedDB store, before the app loads.
+async function seedIndexedDB(page, database, key, value) {
+  await page.route('/__seed', (route) => route.fulfill({ body: '<html></html>', contentType: 'text/html' }));
+  await page.goto('/__seed');
+  await page.evaluate(({ database, key, value }) => new Promise((resolve, reject) => {
+    const request = indexedDB.open(database, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('records');
+    request.onsuccess = () => {
+      const tx = request.result.transaction('records', 'readwrite');
+      tx.objectStore('records').put(value, key);
+      tx.oncomplete = () => { request.result.close(); resolve(); };
+      tx.onerror = reject;
+    };
+    request.onerror = reject;
+  }), { database, key, value });
+}
+
+test('hostile numbers in stored projects never become markup', async ({ page, isMobile }) => {
+  watchErrors(page);
+  const payload = '"><img src=x onerror="window.__xss=(window.__xss||0)+1">';
+  const version = (extra) => ({ id: 'v1', versionNumber: 1, rle: 'x = 3, y = 1, rule = B3/S23\nooo!', width: 40, height: 40, generation: 0, population: 3, ...extra });
+  const creation = {
+    id: 'c1', ownerId: 'profile-local', ownerName: 'Me', title: 'Hostile', description: '', tags: [],
+    visibility: 'public', slug: 'hostile', publishedAt: '2026-01-01T00:00:00Z', starCount: payload,
+    createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    previewConfig: { version: 1, grid: { columns: 6, rows: 5 }, cells: [[payload, 0], [1, 1]] },
+    currentVersion: version({ id: 'v2', width: payload, height: payload, versionNumber: payload }),
+    versions: [version({ versionNumber: payload }), version({ id: 'v2', width: payload, height: payload, versionNumber: 2 })],
+  };
+  await seedIndexedDB(page, 'life-logic-community-v1-projects-v2', 'state', { profile: null, activeCreationId: null, creations: [creation] });
+
+  await page.goto('/community');
+  await expect(page.locator('#community-grid article[data-creation-id="c1"]')).toBeVisible();
+  await page.locator('#community-grid [data-community-action="open"][data-creation-id="c1"]').click();
+  await expect(page.locator('#detail-title')).toHaveText('Hostile');
+  await page.goto('/studio');
+  await page.locator('#projects-back').click();
+  await expect(page.locator('#projects-list [data-project-id="c1"]')).toContainText('0 × 0');
+  await page.locator('#projects-list [data-project-id="c1"]').click();
+  await openInspector(page, isMobile);
+  await expect(page.locator('#version-history .version-row')).toHaveCount(2);
+  expect(await page.evaluate(() => ({ xss: window.__xss || 0, images: document.querySelectorAll('img[src="x"]').length })))
+    .toEqual({ xss: 0, images: 0 });
+});
