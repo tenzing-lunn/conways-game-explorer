@@ -80,7 +80,7 @@ import {
 } from './workspace.js';
 import { presetGroups, presets } from './presets.js';
 import { createPendingActionStore, validateAccountFields } from './account-flow.js';
-import { readRecovery, writeRecovery, deleteRecovery } from './local-database.js';
+import { readRecovery, writeRecovery, deleteRecovery, safeStorage } from './local-database.js';
 
 const WORLD_WIDTH = 300;
 const WORLD_HEIGHT = 200;
@@ -160,6 +160,7 @@ const PUBLISH_ISSUE_COPY = {
   'tags:too_many': 'Use no more than 8 tags.',
   'tags:invalid': 'Tags can use lowercase letters, numbers and single hyphens.',
   'board:invalid_size': 'The board is empty or too large to publish.',
+  'board:invalid_dimensions': 'Boards must fit within 2,048 × 2,048 to publish.',
   'board:empty': 'Add at least one live cell before publishing.',
   'board:invalid_rle': 'The board snapshot is not valid RLE.',
 };
@@ -309,6 +310,8 @@ const elements = {
   toast: $('#toast'),
 };
 
+// localStorage itself, or an in-memory stand-in when the browser blocks it.
+const browserStorage = safeStorage();
 const localCommunity = createCommunityRepository({ backend: 'local' });
 const pendingActions = createPendingActionStore();
 let community = localCommunity;
@@ -988,12 +991,13 @@ function ownedSnapshot(board = state.board) {
 // edges to bounded, so its boards carry a `wrapping` tag that this wrapper
 // keeps in a parallel stack mirroring the history's push, pop and trim order
 // (anchored on entryCount so trimming stays in step). Undo then restores the
-// previous edge mode and Redo makes the board bounded again.
+// previous edge mode and Redo makes the board bounded again. The same tags
+// remember the circuit on each board, so Undo after Clear brings it back.
 function withEdgeMemory(history) {
   const tags = { undo: [], redo: [] };
   let order = 0;
   function push(stack, board) {
-    stack.push({ wrapping: board.wrapping, order: order += 1 });
+    stack.push({ wrapping: board.wrapping, circuit: board.circuit || null, order: order += 1 });
     while (tags.undo.length + tags.redo.length > history.entryCount) {
       const oldest = !tags.redo.length || (tags.undo.length && tags.undo[0].order < tags.redo[0].order) ? tags.undo : tags.redo;
       oldest.shift();
@@ -1001,6 +1005,7 @@ function withEdgeMemory(history) {
   }
   function tagged(board, entry) {
     if (entry?.wrapping !== undefined) board.wrapping = entry.wrapping;
+    if (entry) board.circuit = entry.circuit;
     return board;
   }
   return {
@@ -1051,9 +1056,16 @@ function beginAuthoringCommand({ rememberEdges = false } = {}) {
   }
   state.simulation?.cancel();
   loadSimulation();
-  const snapshot = ownedSnapshot();
+  const snapshot = historySnapshot();
   if (rememberEdges) snapshot.wrapping = state.designSettings.wrapping;
   state.history.record(snapshot);
+}
+
+// The board for the history, tagged with the circuit it carries (if any).
+function historySnapshot() {
+  const snapshot = ownedSnapshot();
+  if (state.circuitSpec) snapshot.circuit = state.circuitSpec;
+  return snapshot;
 }
 
 function finishAuthoringCommand({ keepSelection = false } = {}) {
@@ -1147,21 +1159,21 @@ function updateHistoryControls() {
 
 function undoBoard() {
   if (state.playing) return;
-  const previous = state.history.undo(ownedSnapshot());
+  const previous = state.history.undo(historySnapshot());
   if (!previous) return;
   restoreHistoryBoard(previous);
 }
 
 function redoBoard() {
   if (state.playing) return;
-  const next = state.history.redo(ownedSnapshot());
+  const next = state.history.redo(historySnapshot());
   if (!next) return;
   restoreHistoryBoard(next);
 }
 
 // A history entry may have a different size (a masterwork grew the board, or
 // the grid was resized); the settings and the view follow it.
-function restoreHistoryBoard(board) {
+function restoreHistoryBoard({ circuit, ...board }) {
   const resized = board.width !== state.board.width || board.height !== state.board.height;
   const edgesChanged = board.wrapping !== undefined && board.wrapping !== state.designSettings.wrapping;
   if (edgesChanged) state.designSettings = mergeDesignSettings(state.designSettings, { wrapping: board.wrapping });
@@ -1172,8 +1184,26 @@ function restoreHistoryBoard(board) {
     fitBoard();
   }
   if (resized || edgesChanged) syncDesignControls();
+  if (circuit && !state.circuitSpec) reattachCircuit(circuit);
+  else if (!circuit && state.circuitSpec) { exitCircuit(); renderInspector(); }
   markDesignDirty(true);
   updateHistoryControls();
+}
+
+// Undo can return to a board a circuit was cleared from. A circuit spec never
+// changes within one history (every edit rebuilds and clears it), so the
+// gates, switches and lamps come back on the restored cells as they were.
+function reattachCircuit(spec) {
+  closeChipMenu();
+  state.circuitSpec = spec;
+  state.circuit = buildSpec(spec);
+  state.circuitOutputs = null;
+  state.designSettings = mergeDesignSettings(state.designSettings, { wrapping: false });
+  loadSimulation(state.board, { wrapping: false });
+  syncDesignControls();
+  updatePresetSelection();
+  renderInspector();
+  renderCircuitBar();
 }
 
 function resetToStart() {
@@ -1224,43 +1254,69 @@ function renderPublishButton() {
 function scheduleLocalRecovery() {
   if (state.boardOwner !== 'studio') return;
   window.clearTimeout(recoveryTimer);
-  recoveryTimer = window.setTimeout(async () => {
-    try {
-      // The Playground may be on screen by now; snapshot the Studio workspace.
-      const studio = state.boardOwner === 'studio' ? state : state.workspaces.studio;
-      if (!studio) return;
-      const authored = ownedSnapshot(studio.authoredStart || studio.board);
-      if (!studio.session && authored.population === 0) return;
-      const recovery = {
-        format: 'life-board-binary-v1',
-        creationId: studio.session?.creationId || null,
-        title: studio.session?.title || elements.projectTitle.value || 'Untitled project',
-        description: elements.projectDescription.value || '',
-        tags: elements.projectTags.value || '',
-        cells: new Uint8Array(authored.cells),
-        width: authored.width,
-        height: authored.height,
-        generation: 0,
-        population: authored.population,
-        settings: getCurrentDesignSettings(studio),
-        circuit: getCircuitSpec(studio.circuitSpec),
-        savedAt: new Date().toISOString(),
-      };
-      await writeRecovery(LOCAL_RECOVERY_KEY, recovery);
-      localStorage.removeItem(LOCAL_RECOVERY_KEY);
-      state.recoveryFailed = false;
-    } catch {
-      state.recoveryFailed = true;
-      setSaveStatus('failed');
-    }
-  }, 500);
+  recoveryTimer = window.setTimeout(() => writeLocalRecovery(), 500);
+}
+
+// Leaving or hiding the page saves a pending recovery at once, so the last
+// half second of edits survives a reload or a closed tab. An IndexedDB write
+// may not finish while the page unloads, so a synchronous RLE copy goes to
+// localStorage first; the database write removes it once it lands.
+function flushLocalRecovery() {
+  if (!recoveryTimer) return;
+  window.clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+  const recovery = getLocalRecovery();
+  if (!recovery) return;
+  try {
+    const { cells, format, ...rest } = recovery;
+    const board = { ...createBoard(recovery.width, recovery.height), cells };
+    browserStorage.setItem(LOCAL_RECOVERY_KEY, JSON.stringify({ ...rest, rle: boardToRle(board) }));
+  } catch { /* too large or blocked: the database write below still runs */ }
+  writeLocalRecovery(recovery);
+}
+
+// The Studio workspace as a recovery record, or null when there is nothing to keep.
+function getLocalRecovery() {
+  // The Playground may be on screen by now; snapshot the Studio workspace.
+  const studio = state.boardOwner === 'studio' ? state : state.workspaces.studio;
+  if (!studio) return null;
+  const authored = ownedSnapshot(studio.authoredStart || studio.board);
+  if (!studio.session && authored.population === 0) return null;
+  return {
+    format: 'life-board-binary-v1',
+    creationId: studio.session?.creationId || null,
+    title: studio.session?.title || elements.projectTitle.value || 'Untitled project',
+    description: elements.projectDescription.value || '',
+    tags: elements.projectTags.value || '',
+    cells: new Uint8Array(authored.cells),
+    width: authored.width,
+    height: authored.height,
+    generation: 0,
+    population: authored.population,
+    settings: getCurrentDesignSettings(studio),
+    circuit: getCircuitSpec(studio.circuitSpec),
+    savedAt: new Date().toISOString(),
+  };
+}
+
+async function writeLocalRecovery(recovery = getLocalRecovery()) {
+  recoveryTimer = null;
+  try {
+    if (!recovery) return;
+    await writeRecovery(LOCAL_RECOVERY_KEY, recovery);
+    browserStorage.removeItem(LOCAL_RECOVERY_KEY);
+    state.recoveryFailed = false;
+  } catch {
+    state.recoveryFailed = true;
+    setSaveStatus('failed');
+  }
 }
 
 function clearLocalRecovery() {
   window.clearTimeout(recoveryTimer);
   recoveryTimer = null;
   try {
-    localStorage.removeItem(LOCAL_RECOVERY_KEY);
+    browserStorage.removeItem(LOCAL_RECOVERY_KEY);
     deleteRecovery(LOCAL_RECOVERY_KEY).catch(() => {});
     state.recoveryFailed = false;
   } catch {
@@ -1270,8 +1326,11 @@ function clearLocalRecovery() {
 
 async function restoreLocalRecovery() {
   try {
-    const raw = localStorage.getItem(LOCAL_RECOVERY_KEY);
-    const recovery = await readRecovery(LOCAL_RECOVERY_KEY) || (raw && JSON.parse(raw));
+    const raw = browserStorage.getItem(LOCAL_RECOVERY_KEY);
+    const copy = raw ? JSON.parse(raw) : null;
+    const stored = await readRecovery(LOCAL_RECOVERY_KEY).catch(() => null);
+    // A copy written while the page closed is newer than the database record.
+    const recovery = copy && !(String(stored?.savedAt || '') > String(copy.savedAt || '')) ? copy : stored;
     if (!recovery) return false;
     if (!recovery.creationId && !(Number(recovery.population) > 0)) return false;
     swapWorkspace('studio');
@@ -1600,8 +1659,9 @@ async function saveCurrentCreation({ publish = false, resumed = false } = {}) {
       const message = PUBLISH_ISSUE_COPY[`${issue?.field}:${issue?.code}`] || 'Fill in the publish details first.';
       // Nothing was attempted, so the button keeps its label.
       setPublishStatus(previousStatus);
-      showToast(message, { kind: 'error' });
+      // Open the sheet first: opening it dismisses any toast.
       if (MOBILE_QUERY.matches) openInspector(true);
+      showToast(message, { kind: 'error' });
       const issueField = readiness.issues[0]?.field;
       if (issueField === 'description') elements.projectDescription.focus();
       else if (issueField === 'tags') elements.projectTags.focus();
@@ -1654,7 +1714,11 @@ async function saveCurrentCreation({ publish = false, resumed = false } = {}) {
   markDesignDirty(false);
   clearLocalRecovery();
   triggerHaptic('save');
-  showToast(publish ? (isCloudCommunityActive() ? 'Published to Community' : 'Published on this device') : 'Saved', { kind: 'success' });
+  if (!isCloudCommunityActive() && localCommunity.isMemoryOnly?.()) {
+    showToast('Saved for this visit only. This browser is blocking site storage.', { kind: 'info' });
+  } else {
+    showToast(publish ? (isCloudCommunityActive() ? 'Published to Community' : 'Published on this device') : 'Saved', { kind: 'success' });
+  }
   renderStudio();
   return creation;
 }
@@ -1738,12 +1802,17 @@ function loadCreationOntoBoard(creation) {
       width: version.width || state.board.width,
       height: version.height || state.board.height,
     });
+  // Stored sizes are untrusted; anything but a whole number in the grid
+  // limits falls back to the clamped settings.
+  const side = (value, fallback) => (Number.isInteger(value) && value >= 1 && value <= 3000 ? value : fallback);
+  const width = side(version.width, settings.width);
+  const height = side(version.height, settings.height);
   const nextBoard = isFamous(creation)
-    ? centredBoardFromRle(version.rle, version.width || settings.width, version.height || settings.height)
+    ? centredBoardFromRle(version.rle, width, height)
     : boardFromRle(version.rle, {
       generation: Number(version.generation || 0),
-      width: version.width || settings.width,
-      height: version.height || settings.height,
+      width,
+      height,
     });
 
   state.designSettings = settings;
@@ -1804,7 +1873,7 @@ function renderProjectsPage() {
     const updated = formatDate(creation.updatedAt);
     button.innerHTML = `
       <strong>${escapeHtml(creation.title)}</strong>
-      <span>${formatCellCount(creation.currentVersion?.population)} · ${creation.currentVersion?.width || 0} × ${creation.currentVersion?.height || 0}</span>
+      <span>${formatCellCount(creation.currentVersion?.population)} · ${wholeNumber(creation.currentVersion?.width)} × ${wholeNumber(creation.currentVersion?.height)}</span>
       <span>${creation.visibility === 'public' ? 'Published' : 'Private'} · updated ${escapeHtml(updated)}</span>
     `;
     elements.projectsList.append(button);
@@ -1830,7 +1899,7 @@ function renderVersionHistory(creation) {
     const current = version.id === creation.currentVersion?.id;
     row.className = `version-row${current ? ' current' : ''}`;
     row.innerHTML = `
-      <span><strong>Version ${version.versionNumber || 1}</strong><small>${current ? 'Current' : formatCellCount(version.population)}</small></span>
+      <span><strong>Version ${wholeNumber(version.versionNumber) || 1}</strong><small>${current ? 'Current' : formatCellCount(version.population)}</small></span>
       ${current ? '' : `<button class="button button-small" type="button" data-restore-version-id="${escapeHtml(version.id)}">Restore</button>`}
     `;
     elements.versionHistory.append(row);
@@ -2254,7 +2323,7 @@ function renderInspector() {
     const listed = gates.length > 1 ? `${gates.slice(0, -1).join(', ')} and ${gates.at(-1)}` : gates[0] || '';
     const row = document.createElement('label');
     row.className = 'switch-row';
-    row.innerHTML = `<span>${name.toUpperCase()}<small>${escapeHtml(listed ? `feeds ${listed}` : '')}</small></span><input class="switch" type="checkbox" role="switch" data-input="${name}" aria-label="Input ${name.toUpperCase()}" ${spec.inputs[name] ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
+    row.innerHTML = `<span>${escapeHtml(name.toUpperCase())}<small>${escapeHtml(listed ? `feeds ${listed}` : '')}</small></span><input class="switch" type="checkbox" role="switch" data-input="${escapeHtml(name)}" aria-label="Input ${escapeHtml(name.toUpperCase())}" ${spec.inputs[name] ? 'checked' : ''} ${state.circuitRunning ? 'disabled' : ''} />`;
     elements.inputsList.append(row);
   }
   // Explain once why a lane may enter a gate from below or the side.
@@ -2266,7 +2335,7 @@ function renderInspector() {
     const lampState = getLampState(output);
     const row = document.createElement('div');
     row.className = 'lamp-row';
-    row.innerHTML = `<span>${escapeHtml(outputLabel(port))}</span><span class="lamp" data-output="${port.id}" data-state="${lampState}">${getLampLabel(lampState)}</span>`;
+    row.innerHTML = `<span>${escapeHtml(outputLabel(port))}</span><span class="lamp" data-output="${escapeHtml(port.id)}" data-state="${lampState}">${getLampLabel(lampState)}</span>`;
     elements.outputsList.append(row);
   }
 
@@ -2310,11 +2379,11 @@ function circuitLimitNote(attempt) {
 
 function formulaHtml(node, outputIndex, path, disabled) {
   const chip = (kind, label, extra) => `<button class="chip chip-${kind}" type="button" data-chip="${kind}" data-output="${outputIndex}" data-path="${path.join('.')}" ${extra} aria-haspopup="menu" aria-expanded="false"${disabled}>${label}<svg class="icon chip-caret" aria-hidden="true"><use href="#i-chevron" /></svg></button>`;
-  if (isInputNode(node)) return chip('input', node.input.toUpperCase(), `data-input="${node.input}"`);
+  if (isInputNode(node)) return chip('input', escapeHtml(node.input.toUpperCase()), `data-input="${escapeHtml(node.input)}"`);
   const operand = (child, step) => (isInputNode(child)
     ? formulaHtml(child, outputIndex, [...path, step], disabled)
     : `<span class="formula-paren" aria-hidden="true">(</span>${formulaHtml(child, outputIndex, [...path, step], disabled)}<span class="formula-paren" aria-hidden="true">)</span>`);
-  const gate = chip('gate', node.gate.toUpperCase(), `data-gate="${node.gate}"`);
+  const gate = chip('gate', escapeHtml(node.gate.toUpperCase()), `data-gate="${escapeHtml(node.gate)}"`);
   if (node.gate === 'not') return `${gate}${operand(node.a, 'a')}`;
   return `${operand(node.a, 'a')}${gate}${operand(node.b, 'b')}`;
 }
@@ -2431,7 +2500,7 @@ function renderCircuitBar() {
   if (!experiment) return;
   elements.circuitBarLamps.innerHTML = experiment.outputs.map((port) => {
     const lampState = getLampState(state.circuitOutputs?.find((candidate) => candidate.id === port.id) || null);
-    return `<span class="bar-lamp" data-bar-output="${port.id}"><span class="bar-lamp-name">${escapeHtml(outputLabel(port))}</span>`
+    return `<span class="bar-lamp" data-bar-output="${escapeHtml(port.id)}"><span class="bar-lamp-name">${escapeHtml(outputLabel(port))}</span>`
       + `<span class="lamp" data-state="${lampState}">${getLampLabel(lampState)}</span></span>`;
   }).join('');
   const filling = state.circuitRunning && state.truthRows?.current > 0;
@@ -2452,7 +2521,7 @@ function renderTruthTable() {
   const rows = measured
     ? state.truthRows.rows
     : getInputCombinations(inputNames).map((inputs) => ({ inputs, outputs: null }));
-  const header = `<tr>${inputNames.map((name) => `<th scope="col">${name.toUpperCase()}</th>`).join('')}${outputs.map((port) => `<th scope="col">${escapeHtml(outputLabel(port))}</th>`).join('')}</tr>`;
+  const header = `<tr>${inputNames.map((name) => `<th scope="col">${escapeHtml(name.toUpperCase())}</th>`).join('')}${outputs.map((port) => `<th scope="col">${escapeHtml(outputLabel(port))}</th>`).join('')}</tr>`;
   const body = rows.map((row) => `<tr>${inputNames.map((name) => `<td>${row.inputs[name] ? 1 : 0}</td>`).join('')}${outputs.map((port) => {
     const output = row.outputs?.find((candidate) => candidate.id === port.id);
     if (!output) return '<td class="pending">·</td>';
@@ -3129,7 +3198,8 @@ function drawArrowHead(x, y, angle) {
   ctx.restore();
 }
 
-function plural(count, singular, pluralForm = `${singular}s`) {
+function plural(value, singular, pluralForm = `${singular}s`) {
+  const count = wholeNumber(value);
   return `${count.toLocaleString()} ${count === 1 ? singular : pluralForm}`;
 }
 
@@ -3311,16 +3381,22 @@ function navigateTo(path, { replace = false, render = true } = {}) {
 
 async function routeCurrentLocation() {
   const path = window.location.pathname;
+  // A malformed escape such as /c/%E0%A4%A reads as a pattern that does not exist.
   const creationMatch = path.match(/^\/c\/([^/]+)$/);
-  if (creationMatch) { await openPublicCreationRoute(decodeURIComponent(creationMatch[1])); return; }
+  if (creationMatch) { await openPublicCreationRoute(decodePathPart(creationMatch[1])); return; }
   const profileMatch = path.match(/^\/u\/([^/]+)$/);
-  if (profileMatch) { await openCreatorRoute(decodeURIComponent(profileMatch[1]), { updateHistory: false }); return; }
+  const username = profileMatch && decodePathPart(profileMatch[1]);
+  if (username) { await openCreatorRoute(username, { updateHistory: false }); return; }
   const mode = getModeForPath(path);
   if (mode === 'community') {
     state.communityView = 'gallery';
     state.publicProfile = null;
   }
   setMode(mode);
+}
+
+function decodePathPart(value) {
+  try { return decodeURIComponent(value); } catch { return ''; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -3503,15 +3579,20 @@ function getCommunityPreviewHtml(creation) {
 function getPreviewGridHtml(preview) {
   // Every preview is padded onto the same 24 x 16 field (the largest a preview
   // is downsampled to), so cells are the same size on every card.
-  const sourceColumns = Number(preview?.grid?.columns || 6);
-  const sourceRows = Number(preview?.grid?.rows || 5);
+  // Stored previews are untrusted: only whole-number cells inside the grid
+  // reach the markup.
+  const sourceColumns = Math.min(24, wholeNumber(preview?.grid?.columns) || 6);
+  const sourceRows = Math.min(16, wholeNumber(preview?.grid?.rows) || 5);
   const columns = Math.max(24, sourceColumns);
   const rows = Math.max(16, sourceRows);
   const offsetX = Math.floor((columns - sourceColumns) / 2);
   const offsetY = Math.floor((rows - sourceRows) / 2);
+  const cells = (Array.isArray(preview?.cells) ? preview.cells : [])
+    .filter((cell) => Array.isArray(cell) && Number.isInteger(cell[0]) && Number.isInteger(cell[1])
+      && cell[0] >= 0 && cell[1] >= 0 && cell[0] < sourceColumns && cell[1] < sourceRows);
   return `
     <span class="preview-grid" aria-hidden="true" style="--preview-cols:${columns};--preview-rows:${rows}">
-      ${(preview?.cells || []).map(([x, y]) => `<span style="grid-column:${x + offsetX + 1};grid-row:${y + offsetY + 1}"></span>`).join('')}
+      ${cells.map(([x, y]) => `<span style="grid-column:${x + offsetX + 1};grid-row:${y + offsetY + 1}"></span>`).join('')}
     </span>
   `;
 }
@@ -3570,7 +3651,7 @@ function renderCommunityDetail(creation) {
         <div class="detail-tags" id="detail-tags">${(creation.tags || []).map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>
         <div class="detail-meta">
           <span>${formatCellCount(creation.currentVersion?.population)}</span>
-          <span>${creation.currentVersion?.width || 0} × ${creation.currentVersion?.height || 0}</span>
+          <span>${wholeNumber(creation.currentVersion?.width)} × ${wholeNumber(creation.currentVersion?.height)}</span>
           ${famous ? '' : `<span>${plural(creation.starCount || 0, 'star')}</span><span>${plural(creation.cloneCount || 0, 'remix', 'remixes')}</span>`}
         </div>
         <div class="detail-actions">
@@ -3618,7 +3699,7 @@ async function openPublicCreationRoute(identifier) {
   elements.communityDetail.innerHTML = '<p class="community-status" role="status">Loading…</p>';
   try {
     let creation = findCommunityDesign(identifier);
-    if (!creation && communityAuth.cloudRepo?.getPublicCreation) creation = await communityAuth.cloudRepo.getPublicCreation(identifier);
+    if (!creation && identifier && communityAuth.cloudRepo?.getPublicCreation) creation = await communityAuth.cloudRepo.getPublicCreation(identifier);
     if (!creation || creation.visibility !== 'public') throw Object.assign(new Error('This pattern is unavailable or private.'), { status: 404 });
     state.publicCreations = [creation, ...state.publicCreations.filter((item) => item.id !== creation.id)];
     state.selectedCommunityId = creation.id;
@@ -3935,24 +4016,41 @@ function getCurrentCreationPreviewConfig() {
   return state.circuitSpec ? { ...config, circuit: getCircuitSpec() } : config;
 }
 
+// Opens a #build= link (at boot, or pasted into an open tab) as a new Studio
+// project. Unsaved Studio work is only replaced after the visitor agrees.
 function importSharedBuildFromHash() {
   const shared = decodeShareLink(window.location.hash);
   if (!shared) return;
+  // Drop the hash so a reload does not open the link again.
+  window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search);
+  const studio = state.boardOwner === 'studio' ? state : state.workspaces.studio;
+  if (studio?.designDirty && !window.confirm('Open the shared pattern? It replaces your unsaved Studio work.')) return;
 
   try {
     const pattern = parseRle(shared.rle);
+    const bounds = getPatternBounds(pattern.coordinates);
     swapWorkspace('studio');
-    state.board = clearBoard(state.board);
-    state.board = placePattern(state.board, pattern.coordinates, 0, 0);
+    // A pattern larger than the default board gets a board that holds it
+    // (within the grid limits) instead of wrapping onto itself.
+    const fits = bounds.width <= DEFAULT_DESIGN_SETTINGS.width && bounds.height <= DEFAULT_DESIGN_SETTINGS.height;
+    state.designSettings = fits ? DEFAULT_DESIGN_SETTINGS : createDesignSettings({
+      gridPreset: 'custom',
+      width: Math.max(DEFAULT_DESIGN_SETTINGS.width, bounds.width + 24),
+      height: Math.max(DEFAULT_DESIGN_SETTINGS.height, bounds.height + 24),
+    });
+    const { width, height } = state.designSettings;
+    replaceBoard(placePattern(createBoard(width, height), pattern.coordinates,
+      Math.floor((width - bounds.width) / 2) - bounds.minX, Math.floor((height - bounds.height) / 2) - bounds.minY));
     state.authoredStart = ownedSnapshot();
-    loadSimulation();
     fitLiveCells({ deferred: true });
-    updateStats();
     startProject({ title: shared.title || 'Shared pattern', boardLoaded: true });
     setProjectFields({ title: shared.title, description: shared.description, tags: shared.tags });
     markDesignDirty(true);
     navigateTo('/studio', { replace: true });
-    showToast(shared.ownerName ? `Opened a pattern shared by ${shared.ownerName}` : 'Opened a shared pattern', { kind: 'success' });
+    // The owner name is unverified text from the link: keep it short.
+    const owner = String(shared.ownerName || '').replace(/\s+/g, ' ').trim();
+    const sharer = owner.length > 40 ? `${owner.slice(0, 39)}…` : owner;
+    showToast(sharer ? `Opened a pattern shared by ${sharer}` : 'Opened a shared pattern', { kind: 'success' });
   } catch {
     showToast('That share link could not be opened', { kind: 'error' });
   }
@@ -4339,7 +4437,7 @@ function getCurrentTheme() {
 function applyTheme(theme, { persist = true } = {}) {
   document.documentElement.dataset.theme = theme;
   if (persist) {
-    try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage may be unavailable */ }
+    try { browserStorage.setItem(THEME_KEY, theme); } catch { /* storage may be unavailable */ }
   }
   elements.themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
   elements.themeToggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
@@ -4418,7 +4516,14 @@ function escapeHtml(value) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// A number for markup: anything that is not a finite number becomes 0.
+function wholeNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.trunc(number) : 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -4683,6 +4788,7 @@ function bindEvents() {
   elements.modeCommunity.addEventListener('click', () => { state.communityView = 'gallery'; state.publicProfile = null; navigateTo('/community'); });
   $('#brand').addEventListener('click', (event) => { event.preventDefault(); navigateTo('/'); });
   window.addEventListener('popstate', routeCurrentLocation);
+  window.addEventListener('hashchange', importSharedBuildFromHash);
 
   // Rail
   elements.patternSearch.addEventListener('input', () => {
@@ -4831,6 +4937,11 @@ function bindEvents() {
       return;
     }
     if (state.mode === 'community' || (state.mode === 'studio' && state.studioView === 'projects')) return;
+    // A focused button, link or menu item keeps its activation keys: Space
+    // presses it. Letters and arrows still work after a click on a command.
+    const control = target instanceof Element
+      && target.closest('button, a[href], summary, [role="button"], [role="menuitem"], [role="tab"], [role="switch"]');
+    if (control && (event.key === ' ' || event.key === 'Enter')) return;
 
     if (event.key === ' ') { event.preventDefault(); setPlaying(!state.playing); return; }
     if (meta && key === 'z') { event.preventDefault(); if (event.shiftKey) redoBoard(); else undoBoard(); return; }
@@ -4855,11 +4966,24 @@ function bindEvents() {
   window.addEventListener('online', () => {
     if (state.designDirty) setSaveStatus('dirty');
   });
+  window.addEventListener('pagehide', flushLocalRecovery);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushLocalRecovery();
+  });
   window.addEventListener('beforeunload', (event) => {
     if (!state.designDirty || !state.recoveryFailed) return;
     event.preventDefault();
     event.returnValue = '';
   });
+}
+
+// The shortcut list is written with Mac keys; elsewhere ⌘ reads as Ctrl.
+function labelShortcutKeys() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || '';
+  if (/mac|iphone|ipad|ipod/i.test(platform)) return;
+  for (const key of elements.shortcutsDialog.querySelectorAll('kbd')) {
+    key.textContent = key.textContent.replace('⇧⌘', 'Ctrl+Shift+').replace(/⌘(?=\S)/, 'Ctrl+').replace('⌘', 'Ctrl');
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -4890,11 +5014,13 @@ function loop(timestamp) {
 }
 
 async function boot() {
-  communityState = await localCommunity.loadCommunityState();
+  // Blocked or broken storage must never stop the Playground from starting.
+  communityState = await localCommunity.loadCommunityState().catch(() => localCommunity.getState());
   state.simulation = createSimulationClient();
   applyTheme(getCurrentTheme(), { persist: false });
   setSpeed(state.speed);
   setZoom(1);
+  labelShortcutKeys();
   bindEvents();
 
   const glider = findPreset('glider');
