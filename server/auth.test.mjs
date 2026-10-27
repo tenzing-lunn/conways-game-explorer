@@ -33,6 +33,7 @@ test('PostgreSQL pool uses standard connection options for hosted Postgres', asy
   });
 
   assert.equal(pool.options.options, undefined);
+  assert.equal(pool.options.connectionTimeoutMillis, 5_000);
   await pool.end();
 });
 

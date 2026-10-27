@@ -7,6 +7,13 @@ import { createBetterAuth, createPostgresPool } from './server/auth.mjs';
 import { getCommunityConfig, injectCommunityConfig, renderCommunityConfigScript } from './server/community-config.mjs';
 import { handleCommunityRequest } from './server/community-api.mjs';
 import { getPublicPageMetadata, injectPublicPageMetadata, matchPublicPage } from './server/public-page.mjs';
+import {
+  NOT_FOUND_HTML,
+  canonicalAppPath,
+  contentSecurityPolicy,
+  isAppRoute,
+  securityHeaders,
+} from './server/http-policy.mjs';
 
 const defaultHost = '127.0.0.1';
 const defaultPort = Number(process.env.PORT || 5173);
@@ -17,6 +24,7 @@ const types = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
   '.svg': 'image/svg+xml',
 };
 
@@ -38,6 +46,7 @@ export function createRequestHandler({
   }),
 } = {}) {
   return async (request, response) => {
+    for (const [name, value] of Object.entries(securityHeaders())) response.setHeader(name, value);
     try {
       const url = new URL(request.url || '/', `http://${host}:${port}`);
 
@@ -69,9 +78,18 @@ export function createRequestHandler({
         return;
       }
 
+      const canonicalPath = canonicalAppPath(url.pathname);
+      if (canonicalPath) {
+        response.writeHead(301, { location: `${canonicalPath}${url.search}` });
+        response.end();
+        return;
+      }
+
       const publicRoute = matchPublicPage(url.pathname);
-      const appRoute = publicRoute || ['/studio', '/community', '/community/favorites'].includes(url.pathname);
+      const appRoute = isAppRoute(url.pathname);
       const cleanPath = normalize(url.pathname).replace(/^(\.\.[/\\])+/, '');
+      // Serve only the shell and the browser sources, never .env, .git or server code.
+      if (!(cleanPath === '/' || appRoute || cleanPath.startsWith('/src/'))) throw new Error('Not a public file.');
       const filePath = join(root, cleanPath === '/' || appRoute ? 'index.html' : cleanPath);
       const file = await readFile(filePath);
       const isIndexHtml = filePath.endsWith('index.html');
@@ -79,17 +97,26 @@ export function createRequestHandler({
         ? injectCommunityConfig(file.toString('utf8'), env)
         : file;
       if (publicRoute) {
-        const metadata = await getPublicPageMetadata({ pathname: url.pathname, pool: databasePool, origin: url.origin });
+        let metadata = null;
+        try {
+          metadata = await getPublicPageMetadata({ pathname: url.pathname, pool: databasePool, origin: url.origin });
+        } catch (error) {
+          console.error('Public page metadata failed:', error?.message || error);
+        }
         body = injectPublicPageMetadata(body, metadata);
       }
 
       response.writeHead(200, {
         'content-type': types[extname(filePath)] || 'application/octet-stream',
+        ...(isIndexHtml ? { 'content-security-policy': contentSecurityPolicy(body) } : {}),
       });
       response.end(body);
     } catch {
-      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-      response.end('Not found');
+      response.writeHead(404, {
+        'content-type': 'text/html; charset=utf-8',
+        'content-security-policy': contentSecurityPolicy(NOT_FOUND_HTML),
+      });
+      response.end(NOT_FOUND_HTML);
     }
   };
 }

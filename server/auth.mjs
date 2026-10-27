@@ -25,6 +25,8 @@ export function createPostgresPool({ env = process.env } = {}) {
     connectionString,
     max: Number(env.DATABASE_POOL_MAX || 5),
     idleTimeoutMillis: Number(env.DATABASE_IDLE_TIMEOUT_MS || 30_000),
+    // Fail fast during a database outage instead of holding the request open.
+    connectionTimeoutMillis: Number(env.DATABASE_CONNECT_TIMEOUT_MS || 5_000),
     // Keep Better Auth's custom table names in public. Passing a search_path
     // via PostgreSQL startup options is rejected by Neon pooler endpoints and
     // is unnecessary when every application query is fully qualified.

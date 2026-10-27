@@ -5,6 +5,13 @@ import {
   renderCommunityConfigScript,
 } from './server/community-config.mjs';
 import { getPublicPageMetadata, injectPublicPageMetadata, matchPublicPage } from './server/public-page.mjs';
+import {
+  NOT_FOUND_HTML,
+  canonicalAppPath,
+  contentSecurityPolicy,
+  isAppRoute,
+  securityHeaders,
+} from './server/http-policy.mjs';
 
 function getServices(env, origin) {
   const runtimeEnv = {
@@ -72,52 +79,95 @@ async function injectRuntimeConfig(response, env) {
   });
 }
 
+function notFound() {
+  return new Response(NOT_FOUND_HTML, {
+    status: 404,
+    headers: {
+      'cache-control': 'no-store',
+      'content-type': 'text/html; charset=utf-8',
+      'content-security-policy': contentSecurityPolicy(NOT_FOUND_HTML),
+    },
+  });
+}
+
+// Every Worker response gets the shared security headers; HTML responses
+// already carry their own CSP.
+function withSecurityHeaders(response) {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(securityHeaders({ hsts: true }))) {
+    if (!headers.has(name)) headers.set(name, value);
+  }
+  const body = [204, 205, 304].includes(response.status) ? null : response.body;
+  return new Response(body, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function route(request, env, url, services) {
+  if (await isRateLimited(request, url, env)) return tooManyRequests();
+
+  const communityResponse = await handleCommunityFetchRequest({
+    request,
+    auth: services.auth,
+    pool: services.pool,
+  });
+  if (communityResponse) return communityResponse;
+
+  if (url.pathname === '/api/auth' || url.pathname.startsWith('/api/auth/')) {
+    // Keep request-owned connections alive until Better Auth finishes its
+    // asynchronous database work; finally runs before an unawaited return.
+    return services.auth ? await services.auth.handler(request) : serviceUnavailable();
+  }
+
+  if (url.pathname === '/life-runtime.js' || url.pathname === '/life-config.js' || url.pathname === '/community-config.js') {
+    return new Response(renderCommunityConfigScript(services.env), {
+      headers: {
+        'cache-control': 'no-store',
+        'content-type': 'text/javascript; charset=utf-8',
+      },
+    });
+  }
+
+  const canonicalPath = canonicalAppPath(url.pathname);
+  if (canonicalPath) {
+    return new Response(null, { status: 301, headers: { location: new URL(`${canonicalPath}${url.search}`, url).href } });
+  }
+
+  const publicRoute = matchPublicPage(url.pathname);
+  const appRoute = isAppRoute(url.pathname);
+  // The asset service redirects /index.html to /. Fetch the canonical shell
+  // internally so direct app links retain their URL and receive metadata.
+  const assetRequest = appRoute ? new Request(new URL('/', url), { headers: request.headers }) : request;
+  const asset = await env.ASSETS.fetch(assetRequest);
+  if (asset.status === 404) return notFound();
+  const contentType = asset.headers.get('content-type') || '';
+  if (!contentType.includes('text/html')) return asset;
+  let html = injectCommunityConfig(await asset.text(), services.env);
+  if (publicRoute) {
+    let metadata = null;
+    try {
+      metadata = await getPublicPageMetadata({ pathname: url.pathname, pool: services.pool, origin: url.origin });
+    } catch (error) {
+      // A database outage still serves the app shell; the client shows its
+      // own unavailable state.
+      console.error('Public page metadata failed:', error?.message || error);
+    }
+    html = injectPublicPageMetadata(html, metadata);
+  }
+  const headers = new Headers(asset.headers);
+  headers.delete('content-length');
+  headers.delete('etag');
+  headers.set('cache-control', 'no-store');
+  headers.set('content-type', 'text/html; charset=utf-8');
+  headers.set('content-security-policy', contentSecurityPolicy(html));
+  return new Response(html, { status: asset.status, headers });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const services = getServices(env, url.origin);
 
     try {
-      if (await isRateLimited(request, url, env)) return tooManyRequests();
-
-      const communityResponse = await handleCommunityFetchRequest({
-        request,
-        auth: services.auth,
-        pool: services.pool,
-      });
-      if (communityResponse) return communityResponse;
-
-      if (url.pathname === '/api/auth' || url.pathname.startsWith('/api/auth/')) {
-        // Keep request-owned connections alive until Better Auth finishes its
-        // asynchronous database work; finally runs before an unawaited return.
-        return services.auth ? await services.auth.handler(request) : serviceUnavailable();
-      }
-
-      if (url.pathname === '/life-runtime.js' || url.pathname === '/life-config.js' || url.pathname === '/community-config.js') {
-        return new Response(renderCommunityConfigScript(services.env), {
-          headers: {
-            'cache-control': 'no-store',
-            'content-type': 'text/javascript; charset=utf-8',
-          },
-        });
-      }
-
-      const publicRoute = matchPublicPage(url.pathname);
-      const appRoute = publicRoute || ['/studio', '/community', '/community/favorites'].includes(url.pathname);
-      // The asset service redirects /index.html to /. Fetch the canonical shell
-      // internally so direct app links retain their URL and receive metadata.
-      const assetRequest = appRoute ? new Request(new URL('/', url), { headers: request.headers }) : request;
-      const asset = await env.ASSETS.fetch(assetRequest);
-      const contentType = asset.headers.get('content-type') || '';
-      if (!contentType.includes('text/html')) return asset;
-      let html = injectCommunityConfig(await asset.text(), services.env);
-      if (publicRoute) html = injectPublicPageMetadata(html, await getPublicPageMetadata({ pathname: url.pathname, pool: services.pool, origin: url.origin }));
-      const headers = new Headers(asset.headers);
-      headers.delete('content-length');
-      headers.delete('etag');
-      headers.set('cache-control', 'no-store');
-      headers.set('content-type', 'text/html; charset=utf-8');
-      return new Response(html, { status: asset.status, headers });
+      return withSecurityHeaders(await route(request, env, url, services));
     } finally {
       if (services.pool) ctx.waitUntil(services.pool.end());
     }

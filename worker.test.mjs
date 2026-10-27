@@ -52,6 +52,52 @@ test('Worker maps canonical public reloads to the app shell', async () => {
   assert.equal(response.headers.get('etag'), null);
 });
 
+test('Worker redirects trailing-slash app routes and serves a styled 404 for unknown paths', async () => {
+  const env = { ASSETS: { fetch: async (request) => (new URL(request.url).pathname === '/'
+    ? new Response('<html><head><title>Life</title><script>theme()</script></head></html>', { headers: { 'content-type': 'text/html' } })
+    : new Response(null, { status: 404 })) } };
+
+  const redirect = await worker.fetch(new Request('https://life.example/community/?utm_source=linkedin'), env, {});
+  assert.equal(redirect.status, 301);
+  assert.equal(redirect.headers.get('location'), 'https://life.example/community?utm_source=linkedin');
+
+  const missing = await worker.fetch(new Request('https://life.example/does-not-exist'), env, {});
+  assert.equal(missing.status, 404);
+  assert.match(missing.headers.get('content-type'), /text\/html/);
+  assert.match(await missing.text(), /<a href="\/">Go to Life Lab<\/a>/);
+
+  const malformed = await worker.fetch(new Request('https://life.example/c/%E0%A4%A'), env, {});
+  assert.equal(malformed.status, 404);
+});
+
+test('Worker responses carry security headers and a CSP that hashes the inline script', async () => {
+  const html = '<html><head><title>Life</title><script>theme()</script></head></html>';
+  const response = await worker.fetch(new Request('https://life.example/studio'), { ASSETS: assets(html) }, {});
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(response.headers.get('x-frame-options'), 'DENY');
+  assert.equal(response.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+  assert.equal(response.headers.get('strict-transport-security'), 'max-age=31536000');
+  assert.match(response.headers.get('content-security-policy'), /script-src 'self' 'sha256-[A-Za-z0-9+/=]+'/);
+
+  const api = await worker.fetch(new Request('https://life.example/api/community/state'), { ASSETS: assets() }, {});
+  assert.equal(api.headers.get('x-frame-options'), 'DENY');
+});
+
+test('Worker serves the plain app shell for public pages when the database is down', async (t) => {
+  t.mock.method(Pool.prototype, 'query', async () => { throw new Error('connection attempt failed'); });
+  t.mock.method(Pool.prototype, 'end', async () => {});
+  t.mock.method(console, 'error', () => {});
+  const html = '<html><head><title>Life</title><meta property="og:title" content="Life Lab" /></head></html>';
+  const response = await worker.fetch(new Request('https://life.example/c/some-slug'), {
+    ASSETS: assets(html),
+    DATABASE_URL: 'postgres://test:test@127.0.0.1:1/test',
+    BETTER_AUTH_SECRET: 'test-only-secret-at-least-thirty-two-characters',
+  }, { waitUntil() {} });
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /<title>Life<\/title>/);
+});
+
 test('Worker rate limits auth attempts and community writes per client IP', async () => {
   const keys = [];
   const blocked = { limit: async ({ key }) => { keys.push(key); return { success: false }; } };
