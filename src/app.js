@@ -1802,12 +1802,17 @@ function loadCreationOntoBoard(creation) {
       width: version.width || state.board.width,
       height: version.height || state.board.height,
     });
+  // Stored sizes are untrusted; anything but a whole number in the grid
+  // limits falls back to the clamped settings.
+  const side = (value, fallback) => (Number.isInteger(value) && value >= 1 && value <= 3000 ? value : fallback);
+  const width = side(version.width, settings.width);
+  const height = side(version.height, settings.height);
   const nextBoard = isFamous(creation)
-    ? centredBoardFromRle(version.rle, version.width || settings.width, version.height || settings.height)
+    ? centredBoardFromRle(version.rle, width, height)
     : boardFromRle(version.rle, {
       generation: Number(version.generation || 0),
-      width: version.width || settings.width,
-      height: version.height || settings.height,
+      width,
+      height,
     });
 
   state.designSettings = settings;

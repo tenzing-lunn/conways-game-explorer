@@ -180,6 +180,9 @@ test('hostile numbers in stored projects never become markup', async ({ page, is
   await page.locator('#projects-back').click();
   await expect(page.locator('#projects-list [data-project-id="c1"]')).toContainText('0 × 0');
   await page.locator('#projects-list [data-project-id="c1"]').click();
+  // A hostile stored width falls back to a real board size.
+  await expect.poll(async () => (await snapshot(page)).population).toBe(3);
+  expect(Number.isInteger((await snapshot(page)).width)).toBe(true);
   await openInspector(page, isMobile);
   await expect(page.locator('#version-history .version-row')).toHaveCount(2);
   expect(await page.evaluate(() => ({ xss: window.__xss || 0, images: document.querySelectorAll('img[src="x"]').length })))
