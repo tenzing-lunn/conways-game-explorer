@@ -77,7 +77,7 @@ async function drawUnsavedDraft(page, isMobile) {
 test('a share link asks before replacing an unsaved Studio draft', async ({ page, isMobile }) => {
   watchErrors(page);
   await drawUnsavedDraft(page, isMobile);
-  const link = shareHash({ title: 'Shared one', ownerName: 'Ann', rle: 'x = 1, y = 1\no!' });
+  const link = shareHash({ title: 'Shared one', ownerName: '\u202EAnn\u200B\u0007', rle: 'x = 1, y = 1\no!' });
 
   const declined = page.waitForEvent('dialog').then((dialog) => { const message = dialog.message(); dialog.dismiss(); return message; });
   await page.goto(`/${link}`);
@@ -88,7 +88,7 @@ test('a share link asks before replacing an unsaved Studio draft', async ({ page
   page.once('dialog', (dialog) => dialog.accept());
   await page.goto(`/${link}`);
   await expect(page.locator('#project-title')).toHaveValue('Shared one');
-  await expect(page.locator('#toast')).toHaveText('Opened a pattern shared by Ann');
+  await expect(page.locator('#toast')).toHaveText('Opened a pattern shared by “Ann”');
   expect(await page.evaluate(() => location.hash)).toBe('');
 });
 
@@ -107,8 +107,8 @@ test('a wide share link gets a board that holds it, and a pasted link opens in a
   const xs = [...new Set((await page.evaluate(() => window.__lifeLab.liveCells())).map(([x]) => x))].sort((a, b) => a - b);
   expect(xs[2] - xs[0]).toBe(450);
   const toast = await page.locator('#toast').textContent();
-  expect(toast.length).toBeLessThanOrEqual('Opened a pattern shared by '.length + 40);
-  expect(toast).toMatch(/…$/);
+  expect(toast.length).toBeLessThanOrEqual('Opened a pattern shared by “”'.length + 40);
+  expect(toast).toMatch(/^Opened a pattern shared by “Life Lab Team.*…”$/);
 });
 
 // The toast is on top: the element at its centre is the toast itself.

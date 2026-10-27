@@ -4090,10 +4090,12 @@ function importSharedBuildFromHash() {
     setProjectFields({ title: shared.title, description: shared.description, tags: shared.tags });
     markDesignDirty(true);
     navigateTo('/studio', { replace: true });
-    // The owner name is unverified text from the link: keep it short.
-    const owner = String(shared.ownerName || '').replace(/\s+/g, ' ').trim();
+    // The owner name is unverified text from the link: drop control and
+    // bidi/format characters, keep it short, and quote it so a sentence
+    // smuggled into it still reads as a name.
+    const owner = String(shared.ownerName || '').replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').trim();
     const sharer = owner.length > 40 ? `${owner.slice(0, 39)}…` : owner;
-    showToast(sharer ? `Opened a pattern shared by ${sharer}` : 'Opened a shared pattern', { kind: 'success' });
+    showToast(sharer ? `Opened a pattern shared by “${sharer}”` : 'Opened a shared pattern', { kind: 'success' });
   } catch {
     showToast('That share link could not be opened', { kind: 'error' });
   }
