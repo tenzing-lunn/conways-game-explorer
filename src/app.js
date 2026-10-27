@@ -3607,16 +3607,62 @@ function getCreationPreviewAltText(creation) {
   }
 }
 
-function openCommunityDetail(creationId) {
-  const creation = findCommunityDesign(creationId);
+// Hosted feed rows carry only the preview. The board (RLE) is fetched when a
+// pattern is opened, played or remixed.
+function needsFullCreation(creation) {
+  return Boolean(creation && !isFamous(creation) && typeof creation.currentVersion?.rle !== 'string'
+    && communityAuth.cloudRepo?.getPublicCreation);
+}
+
+async function loadFullCommunityDesign(creation) {
+  if (!needsFullCreation(creation)) return creation;
+  const full = await communityAuth.cloudRepo.getPublicCreation(creation.slug || creation.id);
+  if (typeof full?.currentVersion?.rle !== 'string') throw new Error('This pattern is unavailable or private.');
+  state.publicCreations = [full, ...state.publicCreations.filter((item) => item.id !== full.id)];
+  return full;
+}
+
+function renderCommunityDetailError(error) {
+  elements.communityDetail.innerHTML = `<div class="detail-state"><h1>Pattern unavailable</h1><p>${escapeHtml(getErrorMessage(error))}</p><button class="button" type="button" data-community-action="browse">Back to Community</button></div>`;
+}
+
+async function openCommunityDetail(creationId) {
+  let creation = findCommunityDesign(creationId);
   if (!creation) return;
   state.selectedCommunityId = creation.id;
   state.communityView = 'detail';
   elements.communityGallery.hidden = true;
   elements.communityDetail.hidden = false;
-  renderCommunityDetail(creation);
   if (creation.visibility === 'public' && creation.slug) navigateTo(`/c/${encodeURIComponent(creation.slug)}`, { render: false });
   elements.communityPanel.scrollTop = 0;
+  if (needsFullCreation(creation)) {
+    elements.communityDetail.innerHTML = '<p class="community-status" role="status">Loading…</p>';
+    try {
+      creation = await loadFullCommunityDesign(creation);
+    } catch (error) {
+      if (state.selectedCommunityId === creation.id) renderCommunityDetailError(error);
+      return;
+    }
+    if (state.selectedCommunityId !== creation.id || state.communityView !== 'detail') return;
+  }
+  renderCommunityDetail(creation);
+}
+
+// Play and Remix need the board; show the button as busy while it loads.
+async function loadCommunityDesignForAction(creationId, button) {
+  const creation = findCommunityDesign(creationId);
+  if (!needsFullCreation(creation)) return creation;
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  try {
+    return await loadFullCommunityDesign(creation);
+  } catch (error) {
+    showToast(`Could not load this pattern: ${getErrorMessage(error)}`, { kind: 'error' });
+    return null;
+  } finally {
+    button.disabled = false;
+    button.removeAttribute('aria-busy');
+  }
 }
 
 function renderCommunityDetail(creation) {
@@ -3701,6 +3747,7 @@ async function openPublicCreationRoute(identifier) {
     let creation = findCommunityDesign(identifier);
     if (!creation && identifier && communityAuth.cloudRepo?.getPublicCreation) creation = await communityAuth.cloudRepo.getPublicCreation(identifier);
     if (!creation || creation.visibility !== 'public') throw Object.assign(new Error('This pattern is unavailable or private.'), { status: 404 });
+    creation = await loadFullCommunityDesign(creation);
     state.publicCreations = [creation, ...state.publicCreations.filter((item) => item.id !== creation.id)];
     state.selectedCommunityId = creation.id;
     if (communityAuth.cloudRepo?.listPublicComments && !isFamous(creation)) {
@@ -3710,7 +3757,7 @@ async function openPublicCreationRoute(identifier) {
     renderCommunityDetail(creation);
     document.title = `${creation.title} by ${ownerLabel(creation.ownerId, creation.ownerName)} · Life Lab`;
   } catch (error) {
-    elements.communityDetail.innerHTML = `<div class="detail-state"><h1>Pattern unavailable</h1><p>${escapeHtml(getErrorMessage(error))}</p><button class="button" type="button" data-community-action="browse">Back to Community</button></div>`;
+    renderCommunityDetailError(error);
   }
 }
 
@@ -3755,7 +3802,7 @@ async function handleCommunityAction(event) {
   }
 
   if (communityAction === 'open') {
-    openCommunityDetail(creationId);
+    await openCommunityDetail(creationId);
     return;
   }
 
@@ -3764,13 +3811,11 @@ async function handleCommunityAction(event) {
     return;
   }
 
-  if (communityAction === 'play') {
-    playCommunityDesign(creationId);
-    return;
-  }
-
-  if (communityAction === 'remix') {
-    await remixCommunityDesign(creationId);
+  if (communityAction === 'play' || communityAction === 'remix') {
+    const creation = await loadCommunityDesignForAction(creationId, button);
+    if (!creation) return;
+    if (communityAction === 'play') playCommunityDesign(creationId, creation);
+    else await remixCommunityDesign(creationId, creation);
     return;
   }
 
@@ -3805,8 +3850,7 @@ async function handleCommunityAction(event) {
   }
 }
 
-function playCommunityDesign(creationId) {
-  const source = findCommunityDesign(creationId);
+function playCommunityDesign(creationId, source = findCommunityDesign(creationId)) {
   if (!source) return;
 
   try {
@@ -3885,8 +3929,7 @@ async function copyCommunityDesign(creationId) {
   }
 }
 
-async function remixCommunityDesign(creationId) {
-  const creation = findCommunityDesign(creationId);
+async function remixCommunityDesign(creationId, creation = findCommunityDesign(creationId)) {
   if (!creation) return;
 
   const openRemix = (remix) => {
@@ -4047,10 +4090,12 @@ function importSharedBuildFromHash() {
     setProjectFields({ title: shared.title, description: shared.description, tags: shared.tags });
     markDesignDirty(true);
     navigateTo('/studio', { replace: true });
-    // The owner name is unverified text from the link: keep it short.
-    const owner = String(shared.ownerName || '').replace(/\s+/g, ' ').trim();
+    // The owner name is unverified text from the link: drop control and
+    // bidi/format characters, keep it short, and quote it so a sentence
+    // smuggled into it still reads as a name.
+    const owner = String(shared.ownerName || '').replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').trim();
     const sharer = owner.length > 40 ? `${owner.slice(0, 39)}…` : owner;
-    showToast(sharer ? `Opened a pattern shared by ${sharer}` : 'Opened a shared pattern', { kind: 'success' });
+    showToast(sharer ? `Opened a pattern shared by “${sharer}”` : 'Opened a shared pattern', { kind: 'success' });
   } catch {
     showToast('That share link could not be opened', { kind: 'error' });
   }

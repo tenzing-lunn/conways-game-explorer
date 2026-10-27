@@ -149,11 +149,39 @@ These limits are enforced in code; none needs a migration.
 
 - Cloudflare Rate Limiting bindings in `wrangler.jsonc`, keyed on
   `cf-connecting-ip`: `AUTH_RATE_LIMITER` allows 10 sign-in/sign-up POSTs per
-  minute, `WRITE_RATE_LIMITER` 120 community writes per minute. A missing
-  binding (local dev) allows the request.
+  minute, `WRITE_RATE_LIMITER` 120 community writes per minute and
+  `READ_RATE_LIMITER` 300 community reads per minute. A missing binding (local
+  dev) allows the request; a binding that throws allows it and logs
+  `Rate limiter failed` to the Worker logs.
 - Better Auth's own limiter (in-memory, per isolate): 10 sign-ins per minute
   and 10 sign-ups per hour per IP, 100 other auth requests per minute.
 - Per account: 120 community writes per minute (`action_limits`), 200
-  projects, 500 versions per project and per import, 50 MB of stored RLE
-  including unfinished import uploads.
+  projects, 500 versions per project and per import, 10 MB of stored RLE
+  including unfinished import uploads. 10 MB holds about 65 OTCA-sized
+  versions or five 2048×2048 random soups, the largest board the database
+  accepts. Each capped write holds a per-account advisory lock, so parallel
+  requests cannot overshoot a cap.
+- Public feed, profile and trending rows carry previews only; the published
+  RLE is returned by the detail lookup.
 - Profiles: display name 60 characters, bio 500, URLs 300 and `https:` only.
+
+Accounts are still cheap to create: there is no email verification and no
+CAPTCHA, so the per-IP limits are the only brake on sign-up. Adding Cloudflare
+Turnstile to sign-up is the next step; it needs a site key and secret from the
+Cloudflare dashboard.
+
+### Watching database size
+
+Check the size of the database and its largest tables:
+
+```sql
+select pg_size_pretty(pg_database_size(current_database())) as database,
+       pg_size_pretty(pg_total_relation_size('public.creation_versions')) as versions,
+       pg_size_pretty(pg_total_relation_size('public.creation_import_versions')) as import_uploads;
+```
+
+Set a storage alert with the database provider (for example a Neon project
+storage or usage alert) at about 70% of the plan's limit, and a Cloudflare
+notification for Worker error-rate spikes, so a storage fill or an outage is
+noticed before writes start failing. The SQL in "Moderation SQL" above finds
+and disables the account responsible.

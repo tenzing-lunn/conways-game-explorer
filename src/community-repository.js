@@ -302,12 +302,9 @@ export function createPostgresCommunityRepository({
     },
 
     async listTrendingCreations({ limit = 20 } = {}) {
-      const creations = await communityRequest(`/trending?limit=${encodeURIComponent(limit)}`);
-      state = {
-        ...state,
-        creations: creations.reduce((all, creation) => replaceCreation(all, creation), state.creations),
-      };
-      return creations;
+      // Public rows are previews without the board, so they never replace
+      // the member's own projects in repository state.
+      return communityRequest(`/trending?limit=${encodeURIComponent(limit)}`);
     },
 
     findCreation: find,

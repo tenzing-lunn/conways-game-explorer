@@ -1,13 +1,17 @@
 import { fromCreationRow } from './community-repository.mjs';
 
-const selection = `select c.*, p.display_name as owner_name, p.username as owner_username,
-  v.id as version_id, v.version_number, v.rle, v.width, v.height, v.generation,
+// List rows (feed, profile, remix and source cards) carry the preview only;
+// the published RLE (up to 200 KB) is returned by get() for the detail page.
+const select = ({ rle = false } = {}) => `select c.*, p.display_name as owner_name, p.username as owner_username,
+  v.id as version_id, v.version_number, ${rle ? 'v.rle, ' : ''}v.width, v.height, v.generation,
   v.population, v.rule, v.settings, v.created_at as version_created_at,
   exists(select 1 from public.stars s where s.creation_id=c.id and s.profile_id=$1) as viewer_starred,
   (select count(*) from public.comments cm where cm.creation_id=c.id and cm.deleted_at is null) as comment_count
   from public.creations c join public.profiles p on p.id=c.owner_id
   join public.creation_versions v on v.id=c.published_version_id
   where c.visibility='public' and c.archived_at is null and c.moderation_status='visible'`;
+const selection = select();
+const fullSelection = select({ rle: true });
 
 export function createPublicCommunity({ pool, userId = null }) {
   const map = (row) => ({ ...fromCreationRow(row, { publicOnly: true, userId }), commentCount: Number(row.comment_count || 0) });
@@ -38,7 +42,7 @@ export function createPublicCommunity({ pool, userId = null }) {
         ? `${new Date(last.published_at).toISOString()}|${last.id}` : null };
     },
     async get(identifier) {
-      const result = await pool.query(`${selection} and (c.slug=$2 or c.id::text=$2)`, [userId, identifier]);
+      const result = await pool.query(`${fullSelection} and (c.slug=$2 or c.id::text=$2)`, [userId, identifier]);
       if (!result.rows[0]) return null;
       const creation = map(result.rows[0]);
       const source = creation.remixedFromId
