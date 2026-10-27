@@ -114,10 +114,23 @@ test('Worker rate limits auth attempts and community writes per client IP', asyn
   assert.deepEqual(keys, ['203.0.113.7', '203.0.113.7', '203.0.113.7']);
 
   const read = await worker.fetch(new Request('https://life.example/api/community/feed'), env, { waitUntil() {} });
-  assert.notEqual(read.status, 429);
+  assert.notEqual(read.status, 429, 'reads use their own limiter');
+  const readBlocked = await worker.fetch(new Request('https://life.example/api/community/feed?limit=48'),
+    { ...env, READ_RATE_LIMITER: blocked }, { waitUntil() {} });
+  assert.equal(readBlocked.status, 429);
+  const page = await worker.fetch(new Request('https://life.example/'), { ...env, READ_RATE_LIMITER: blocked }, { waitUntil() {} });
+  assert.equal(page.status, 200, 'the app shell is never rate limited');
+});
+
+test('Worker fails open but logs when a rate-limit binding throws', async (t) => {
+  const logged = [];
+  t.mock.method(console, 'error', (...args) => logged.push(args.join(' ')));
   const failing = { limit: async () => { throw new Error('limiter down'); } };
-  const allowed = await worker.fetch(post('/api/community/creations'), { ASSETS: assets(), WRITE_RATE_LIMITER: failing }, { waitUntil() {} });
+  const allowed = await worker.fetch(new Request('https://life.example/api/community/creations', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+  }), { ASSETS: assets(), WRITE_RATE_LIMITER: failing }, { waitUntil() {} });
   assert.equal(allowed.status, 503, 'a failing limiter must not block the request');
+  assert.ok(logged.some((line) => /Rate limiter failed.*limiter down/.test(line)), logged.join('\n'));
 });
 
 test('Worker waits for asynchronous auth queries before ending its pool', async (t) => {

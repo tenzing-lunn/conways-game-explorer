@@ -39,9 +39,10 @@ function serviceUnavailable() {
 const AUTH_ATTEMPT_PATH = /^\/api\/auth\/(?:sign-in|sign-up)(?:\/|$)/;
 
 function rateLimiterFor(request, url, env) {
-  if (request.method === 'GET' || request.method === 'HEAD') return null;
+  const community = url.pathname === '/api/community' || url.pathname.startsWith('/api/community/');
+  if (request.method === 'GET' || request.method === 'HEAD') return community ? env.READ_RATE_LIMITER : null;
   if (AUTH_ATTEMPT_PATH.test(url.pathname)) return env.AUTH_RATE_LIMITER;
-  if (url.pathname === '/api/community' || url.pathname.startsWith('/api/community/')) return env.WRITE_RATE_LIMITER;
+  if (community) return env.WRITE_RATE_LIMITER;
   return null;
 }
 
@@ -51,7 +52,9 @@ async function isRateLimited(request, url, env) {
   try {
     const key = request.headers.get('cf-connecting-ip') || 'unknown';
     return !(await limiter.limit({ key })).success;
-  } catch {
+  } catch (error) {
+    // Fail open so a misconfigured binding never locks people out, but say so.
+    console.error('Rate limiter failed; allowing request:', error?.message || error);
     return false;
   }
 }
