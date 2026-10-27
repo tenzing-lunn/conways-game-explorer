@@ -73,6 +73,20 @@ export function createBetterAuth({
       minPasswordLength: 12,
       maxPasswordLength: 128,
     },
+    // Enabled explicitly: Better Auth's default reads NODE_ENV from
+    // process.env at import time, which the Worker never sets. Memory storage
+    // is per isolate; the Worker's Cloudflare rate-limit binding is the
+    // cross-isolate guard in front of it.
+    rateLimit: {
+      enabled: true,
+      storage: 'memory',
+      window: 60,
+      max: 100,
+      customRules: {
+        '/sign-in/*': { window: 60, max: 10 },
+        '/sign-up/*': { window: 3600, max: 10 },
+      },
+    },
     advanced: {
       // Cloudflare sets this header at the edge; retain the usual proxy header
       // as a local-development fallback for Better Auth's rate limiter.

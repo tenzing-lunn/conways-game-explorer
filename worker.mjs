@@ -26,6 +26,41 @@ function serviceUnavailable() {
   });
 }
 
+// Cloudflare Rate Limiting bindings (wrangler.jsonc `ratelimits`) count per
+// client IP at the edge. Missing bindings (local dev, tests) or a failing
+// limiter allow the request; Better Auth and action_limits still apply.
+const AUTH_ATTEMPT_PATH = /^\/api\/auth\/(?:sign-in|sign-up)(?:\/|$)/;
+
+function rateLimiterFor(request, url, env) {
+  if (request.method === 'GET' || request.method === 'HEAD') return null;
+  if (AUTH_ATTEMPT_PATH.test(url.pathname)) return env.AUTH_RATE_LIMITER;
+  if (url.pathname === '/api/community' || url.pathname.startsWith('/api/community/')) return env.WRITE_RATE_LIMITER;
+  return null;
+}
+
+async function isRateLimited(request, url, env) {
+  const limiter = rateLimiterFor(request, url, env);
+  if (typeof limiter?.limit !== 'function') return false;
+  try {
+    const key = request.headers.get('cf-connecting-ip') || 'unknown';
+    return !(await limiter.limit({ key })).success;
+  } catch {
+    return false;
+  }
+}
+
+function tooManyRequests() {
+  const message = 'Too many attempts. Please wait a minute and try again.';
+  return new Response(JSON.stringify({ error: message, message, code: 'RATE_LIMITED', retryAfter: 60 }), {
+    status: 429,
+    headers: {
+      'cache-control': 'no-store',
+      'content-type': 'application/json; charset=utf-8',
+      'retry-after': '60',
+    },
+  });
+}
+
 async function injectRuntimeConfig(response, env) {
   const headers = new Headers(response.headers);
   headers.delete('content-length');
@@ -43,6 +78,8 @@ export default {
     const services = getServices(env, url.origin);
 
     try {
+      if (await isRateLimited(request, url, env)) return tooManyRequests();
+
       const communityResponse = await handleCommunityFetchRequest({
         request,
         auth: services.auth,

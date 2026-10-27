@@ -82,3 +82,27 @@ test('Better Auth enables password accounts without an email delivery provider',
   assert.equal(auth.options.user.deleteUser.enabled, true);
   assert.equal(auth.options.plugins.some((plugin) => plugin.id === 'magic-link'), false);
 });
+
+test('Better Auth rate limits sign-in attempts regardless of NODE_ENV', async () => {
+  const fakeClient = { async query() { return { rows: [] }; }, release() {} };
+  const auth = createBetterAuth({
+    env: {
+      DATABASE_URL: 'postgres://example.invalid/life',
+      BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-to-meet-minimum-length',
+      BETTER_AUTH_URL: 'http://127.0.0.1:5173',
+    },
+    database: { async connect() { return fakeClient; }, async query() { return { rows: [] }; } },
+  });
+  assert.equal(auth.options.rateLimit.enabled, true);
+  const statuses = [];
+  for (let attempt = 0; attempt < 11; attempt += 1) {
+    const response = await auth.handler(new Request('http://127.0.0.1:5173/api/auth/sign-in/email', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:5173', 'cf-connecting-ip': '203.0.113.9' },
+      body: JSON.stringify({ email: 'nobody@example.test', password: 'a-long-wrong-password' }),
+    }));
+    statuses.push(response.status);
+  }
+  assert.ok(statuses.slice(0, 10).every((status) => status !== 429), statuses.join(','));
+  assert.equal(statuses[10], 429);
+});

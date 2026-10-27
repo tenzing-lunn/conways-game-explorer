@@ -52,6 +52,28 @@ test('Worker maps canonical public reloads to the app shell', async () => {
   assert.equal(response.headers.get('etag'), null);
 });
 
+test('Worker rate limits auth attempts and community writes per client IP', async () => {
+  const keys = [];
+  const blocked = { limit: async ({ key }) => { keys.push(key); return { success: false }; } };
+  const env = { ASSETS: assets(), AUTH_RATE_LIMITER: blocked, WRITE_RATE_LIMITER: blocked };
+  const post = (path) => new Request(`https://life.example${path}`, {
+    method: 'POST', headers: { 'cf-connecting-ip': '203.0.113.7', 'content-type': 'application/json' }, body: '{}',
+  });
+
+  for (const path of ['/api/auth/sign-in/email', '/api/auth/sign-up/email', '/api/community/creations']) {
+    const response = await worker.fetch(post(path), env, { waitUntil() {} });
+    assert.equal(response.status, 429, path);
+    assert.equal((await response.json()).code, 'RATE_LIMITED');
+  }
+  assert.deepEqual(keys, ['203.0.113.7', '203.0.113.7', '203.0.113.7']);
+
+  const read = await worker.fetch(new Request('https://life.example/api/community/feed'), env, { waitUntil() {} });
+  assert.notEqual(read.status, 429);
+  const failing = { limit: async () => { throw new Error('limiter down'); } };
+  const allowed = await worker.fetch(post('/api/community/creations'), { ASSETS: assets(), WRITE_RATE_LIMITER: failing }, { waitUntil() {} });
+  assert.equal(allowed.status, 503, 'a failing limiter must not block the request');
+});
+
 test('Worker waits for asynchronous auth queries before ending its pool', async (t) => {
   let ended = false;
   let queried = false;
