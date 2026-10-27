@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createOwnerScopedSlug } from '../src/community.js';
 import { validateVersionInput } from './version-validation.mjs';
+import { CREATION_VERSION_LIMIT, assertCreationAllowance, assertStorageAllowance } from './community-repository.mjs';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 export const digestImportValue = (value) => sha256(stableJson(value));
@@ -83,6 +84,7 @@ export function createCreationImports({ pool, userId, createId = randomUUID } = 
         let row = (await client.query('select * from public.creation_import_versions where import_id=$1 and local_version_id=$2 for update', [importId, localVersionId])).rows[0];
         if (!row) {
           if (offset !== 0) conflict('Resume offset does not match the uploaded version.');
+          await assertStorageAllowance(client, userId, totalBytes);
           row = (await client.query(`insert into public.creation_import_versions
             (import_id,local_version_id,total_bytes,content_digest,metadata)
             values($1,$2,$3,$4,$5) returning *`, [importId, localVersionId, totalBytes, digest, input?.metadata || {}])).rows[0];
@@ -149,9 +151,10 @@ export function createCreationImports({ pool, userId, createId = randomUUID } = 
             if (!entry || stableJson(entry) !== stableJson(old)) conflict('Imported history cannot be removed or changed.');
           }
         }
+        if (!existingCreation) await assertCreationAllowance(client, userId);
         const creationId = existingCreation?.id || createId();
-        const slugs = (await client.query('select slug from public.creations')).rows.map((row) => row.slug);
-        const slug = `${createOwnerScopedSlug(item.project.title, slugs).slice(0, 95)}-${creationId}`;
+        // The UUID suffix already makes the slug unique.
+        const slug = `${createOwnerScopedSlug(item.project.title, []).slice(0, 95)}-${creationId}`;
         const sourceId = item.project.remixedFromId && (await client.query(`select id from public.creations
           where id::text=$1 and visibility='public' and archived_at is null and moderation_status='visible'`, [item.project.remixedFromId])).rows[0]?.id;
         if (!existingCreation) await client.query(`insert into public.creations(id,owner_id,slug,title,description,tags,attribution,
@@ -163,6 +166,10 @@ export function createCreationImports({ pool, userId, createId = randomUUID } = 
           sourceId || null, item.import_key]);
         const knownIds = new Set(Object.keys(mapping));
         let versionNumber = Number((await client.query('select coalesce(max(version_number),0) as number from public.creation_versions where creation_id=$1', [creationId])).rows[0].number);
+        const newVersions = entries.filter((entry) => !knownIds.has(entry.localVersionId)).length;
+        if (versionNumber + newVersions > CREATION_VERSION_LIMIT) {
+          throw Object.assign(new Error(`A project can keep up to ${CREATION_VERSION_LIMIT} saved versions.`), { status: 422, code: 'LIMIT_REACHED' });
+        }
         for (const entry of entries) if (!mapping[entry.localVersionId]) mapping[entry.localVersionId] = createId();
         for (let index = 0; index < entries.length; index += 1) {
           const entry = entries[index]; const version = validated[index];
@@ -215,7 +222,7 @@ function normalizeStart(input) {
     manifestDigest: String(input?.manifestDigest || '').toLowerCase() };
   if (!value.importKey || value.importKey.length > 200 || !value.localProjectId || !value.capturedRevision
     || !value.project || typeof value.project !== 'object' || !value.currentLocalVersionId
-    || !Number.isInteger(value.totalVersionCount) || value.totalVersionCount < 1 || value.totalVersionCount > 10000
+    || !Number.isInteger(value.totalVersionCount) || value.totalVersionCount < 1 || value.totalVersionCount > CREATION_VERSION_LIMIT
     || !digestPattern.test(value.manifestDigest)) invalid('Import request is invalid.');
   const title = String(value.project.title || '').trim();
   const tags = Array.isArray(value.project.tags) ? value.project.tags : [];
