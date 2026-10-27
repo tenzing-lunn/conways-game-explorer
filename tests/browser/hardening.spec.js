@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { RECOVERY_KEY, clickBoard, snapshot, watchErrors } from './helpers.js';
+import { RECOVERY_KEY, clickBoard, openInspector, snapshot, watchErrors } from './helpers.js';
 
 test.afterEach(async ({ page }) => expect(page.errors).toEqual([]));
 
@@ -107,4 +107,34 @@ test('a wide share link gets a board that holds it, and a pasted link opens in a
   const toast = await page.locator('#toast').textContent();
   expect(toast.length).toBeLessThanOrEqual('Opened a pattern shared by '.length + 40);
   expect(toast).toMatch(/…$/);
+});
+
+// The toast is on top: the element at its centre is the toast itself.
+const toastOnTop = (page) => page.evaluate(() => {
+  const toast = document.querySelector('#toast');
+  const box = toast.getBoundingClientRect();
+  return toast.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+});
+
+test('publish problems show on screen, including on a phone', async ({ page, isMobile }) => {
+  watchErrors(page);
+  await page.goto('/studio');
+  await clickBoard(page, isMobile, 0.46, 0.4);
+  await openInspector(page, isMobile);
+  await page.locator('#project-description').fill('short');
+  const publish = page.locator('#publish-project:visible, #publish-project-mobile:visible');
+  const toast = page.locator('#toast');
+  await publish.click();
+  await expect(toast).toHaveText('Add a description of at least 20 characters.');
+  await expect(toast).toBeInViewport();
+  expect(await toastOnTop(page)).toBe(true);
+
+  await page.locator('#project-description').fill('A single cell that dies at once.');
+  await page.locator('#project-tags').fill('test');
+  await page.evaluate(() => window.__lifeLab.resizeBoard(2100, 2100));
+  await openInspector(page, isMobile);
+  await publish.click();
+  await expect(toast).toHaveText('Boards must fit within 2,048 × 2,048 to publish.');
+  await expect(toast).toBeInViewport();
+  expect(await toastOnTop(page)).toBe(true);
 });

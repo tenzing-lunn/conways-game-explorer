@@ -160,6 +160,7 @@ const PUBLISH_ISSUE_COPY = {
   'tags:too_many': 'Use no more than 8 tags.',
   'tags:invalid': 'Tags can use lowercase letters, numbers and single hyphens.',
   'board:invalid_size': 'The board is empty or too large to publish.',
+  'board:invalid_dimensions': 'Boards must fit within 2,048 × 2,048 to publish.',
   'board:empty': 'Add at least one live cell before publishing.',
   'board:invalid_rle': 'The board snapshot is not valid RLE.',
 };
@@ -1602,8 +1603,9 @@ async function saveCurrentCreation({ publish = false, resumed = false } = {}) {
       const message = PUBLISH_ISSUE_COPY[`${issue?.field}:${issue?.code}`] || 'Fill in the publish details first.';
       // Nothing was attempted, so the button keeps its label.
       setPublishStatus(previousStatus);
-      showToast(message, { kind: 'error' });
+      // Open the sheet first: opening it dismisses any toast.
       if (MOBILE_QUERY.matches) openInspector(true);
+      showToast(message, { kind: 'error' });
       const issueField = readiness.issues[0]?.field;
       if (issueField === 'description') elements.projectDescription.focus();
       else if (issueField === 'tags') elements.projectTags.focus();
