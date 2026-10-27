@@ -183,3 +183,31 @@ test('Worker health check reports database reachability and storage pressure', a
   query.mock.mockImplementation(async () => { throw new Error('connection attempt failed'); });
   assert.deepEqual(await check(), { status: 503, body: { ok: false, database: 'unreachable' } });
 });
+
+test('Worker caps sign-in attempts per IP in a shared PostgreSQL bucket', async (t) => {
+  t.mock.method(Pool.prototype, 'end', async () => {});
+  const buckets = new Map();
+  t.mock.method(Pool.prototype, 'query', async (sql, params) => {
+    if (/insert into public\.action_limits/.test(sql)) {
+      const hits = (buckets.get(params[0]) || 0) + 1;
+      buckets.set(params[0], hits);
+      return { rows: [{ hits }] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+  const env = {
+    ASSETS: assets(),
+    DATABASE_URL: 'postgres://test:test@127.0.0.1:1/test',
+    BETTER_AUTH_SECRET: 'test-only-secret-at-least-thirty-two-characters',
+  };
+  const signIn = (ip) => worker.fetch(new Request('https://life.example/api/auth/sign-in/email', {
+    method: 'POST',
+    headers: { origin: 'https://life.example', 'content-type': 'application/json', 'cf-connecting-ip': ip },
+    body: JSON.stringify({ email: 'nobody@example.test', password: 'a-long-test-password' }),
+  }), env, { waitUntil() {} });
+
+  for (let attempt = 1; attempt <= 10; attempt += 1) assert.notEqual((await signIn('203.0.113.9')).status, 429, `attempt ${attempt}`);
+  assert.equal((await signIn('203.0.113.9')).status, 429);
+  assert.notEqual((await signIn('198.51.100.4')).status, 429, 'other visitors are unaffected');
+  assert.equal(buckets.get('auth:203.0.113.9'), 11);
+});

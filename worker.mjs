@@ -1,3 +1,4 @@
+import { limitAction } from './server/account-security.mjs';
 import { createBetterAuth, createPostgresPool } from './server/auth.mjs';
 import { handleCommunityFetchRequest } from './server/community-api.mjs';
 import {
@@ -56,6 +57,22 @@ async function isRateLimited(request, url, env) {
   } catch (error) {
     // Fail open so a misconfigured binding never locks people out, but say so.
     console.error('Rate limiter failed; allowing request:', error?.message || error);
+    return false;
+  }
+}
+
+// The edge limiter counts per Cloudflare machine and Better Auth's memory
+// limiter lives in a per-request instance, so neither holds across a colo.
+// This shared PostgreSQL bucket is the binding limit on sign-in/sign-up.
+async function isAuthAttemptLimited(request, url, pool) {
+  const ip = request.headers.get('cf-connecting-ip');
+  if (request.method !== 'POST' || !AUTH_ATTEMPT_PATH.test(url.pathname) || !ip || !pool) return false;
+  try {
+    await limitAction(pool, `auth:${ip}`, 10);
+    return false;
+  } catch (error) {
+    if (error?.status === 429) return true;
+    console.error('Auth attempt limit failed; allowing request:', error?.message || error);
     return false;
   }
 }
@@ -133,6 +150,7 @@ function withSecurityHeaders(response) {
 
 async function route(request, env, url, services) {
   if (await isRateLimited(request, url, env)) return tooManyRequests();
+  if (await isAuthAttemptLimited(request, url, services.pool)) return tooManyRequests();
 
   if (url.pathname === '/api/health') return health(services.pool, env);
 
