@@ -80,7 +80,7 @@ import {
 } from './workspace.js';
 import { presetGroups, presets } from './presets.js';
 import { createPendingActionStore, validateAccountFields } from './account-flow.js';
-import { readRecovery, writeRecovery, deleteRecovery } from './local-database.js';
+import { readRecovery, writeRecovery, deleteRecovery, safeStorage } from './local-database.js';
 
 const WORLD_WIDTH = 300;
 const WORLD_HEIGHT = 200;
@@ -309,6 +309,8 @@ const elements = {
   toast: $('#toast'),
 };
 
+// localStorage itself, or an in-memory stand-in when the browser blocks it.
+const browserStorage = safeStorage();
 const localCommunity = createCommunityRepository({ backend: 'local' });
 const pendingActions = createPendingActionStore();
 let community = localCommunity;
@@ -1247,7 +1249,7 @@ function scheduleLocalRecovery() {
         savedAt: new Date().toISOString(),
       };
       await writeRecovery(LOCAL_RECOVERY_KEY, recovery);
-      localStorage.removeItem(LOCAL_RECOVERY_KEY);
+      browserStorage.removeItem(LOCAL_RECOVERY_KEY);
       state.recoveryFailed = false;
     } catch {
       state.recoveryFailed = true;
@@ -1260,7 +1262,7 @@ function clearLocalRecovery() {
   window.clearTimeout(recoveryTimer);
   recoveryTimer = null;
   try {
-    localStorage.removeItem(LOCAL_RECOVERY_KEY);
+    browserStorage.removeItem(LOCAL_RECOVERY_KEY);
     deleteRecovery(LOCAL_RECOVERY_KEY).catch(() => {});
     state.recoveryFailed = false;
   } catch {
@@ -1270,7 +1272,7 @@ function clearLocalRecovery() {
 
 async function restoreLocalRecovery() {
   try {
-    const raw = localStorage.getItem(LOCAL_RECOVERY_KEY);
+    const raw = browserStorage.getItem(LOCAL_RECOVERY_KEY);
     const recovery = await readRecovery(LOCAL_RECOVERY_KEY) || (raw && JSON.parse(raw));
     if (!recovery) return false;
     if (!recovery.creationId && !(Number(recovery.population) > 0)) return false;
@@ -1654,7 +1656,11 @@ async function saveCurrentCreation({ publish = false, resumed = false } = {}) {
   markDesignDirty(false);
   clearLocalRecovery();
   triggerHaptic('save');
-  showToast(publish ? (isCloudCommunityActive() ? 'Published to Community' : 'Published on this device') : 'Saved', { kind: 'success' });
+  if (!isCloudCommunityActive() && localCommunity.isMemoryOnly?.()) {
+    showToast('Saved for this visit only. This browser is blocking site storage.', { kind: 'info' });
+  } else {
+    showToast(publish ? (isCloudCommunityActive() ? 'Published to Community' : 'Published on this device') : 'Saved', { kind: 'success' });
+  }
   renderStudio();
   return creation;
 }
@@ -4339,7 +4345,7 @@ function getCurrentTheme() {
 function applyTheme(theme, { persist = true } = {}) {
   document.documentElement.dataset.theme = theme;
   if (persist) {
-    try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage may be unavailable */ }
+    try { browserStorage.setItem(THEME_KEY, theme); } catch { /* storage may be unavailable */ }
   }
   elements.themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
   elements.themeToggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
@@ -4890,7 +4896,8 @@ function loop(timestamp) {
 }
 
 async function boot() {
-  communityState = await localCommunity.loadCommunityState();
+  // Blocked or broken storage must never stop the Playground from starting.
+  communityState = await localCommunity.loadCommunityState().catch(() => localCommunity.getState());
   state.simulation = createSimulationClient();
   applyTheme(getCurrentTheme(), { persist: false });
   setSpeed(state.speed);

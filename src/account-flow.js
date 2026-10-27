@@ -1,3 +1,5 @@
+import { safeStorage } from './local-database.js';
+
 const PENDING_ACTION_KEY = 'life-lab-pending-action-v1';
 
 export function validateAccountFields({ mode, name = '', email = '', password = '', recoveryKey = '', confirmation = '' }) {
@@ -11,7 +13,7 @@ export function validateAccountFields({ mode, name = '', email = '', password = 
   return { valid: Object.keys(issues).length === 0, issues, email: cleanEmail };
 }
 
-export function createPendingActionStore(storage = globalThis.sessionStorage) {
+export function createPendingActionStore(storage = safeStorage('sessionStorage')) {
   const read = () => {
     try { return JSON.parse(storage?.getItem(PENDING_ACTION_KEY) || 'null'); } catch { return null; }
   };

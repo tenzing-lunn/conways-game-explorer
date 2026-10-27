@@ -539,15 +539,21 @@ export function loadCommunityState(storage = window.localStorage, key = COMMUNIT
     const raw = storage.getItem(key);
     if (!raw) return createCommunityState();
 
-    const parsed = JSON.parse(raw);
-    return createCommunityState({
-      profile: parsed.profile || null,
-      creations: Array.isArray(parsed.creations) ? parsed.creations.map(normalizeCreation) : [],
-      activeCreationId: parsed.activeCreationId || null,
-    });
+    return normalizeCommunityState(JSON.parse(raw));
   } catch {
     return createCommunityState();
   }
+}
+
+// Stored state (localStorage or IndexedDB) is untrusted: anything that is not
+// the expected shape is dropped rather than left to throw while rendering.
+export function normalizeCommunityState(value) {
+  const stored = normalizeObject(value);
+  return createCommunityState({
+    profile: isPlainObject(stored.profile) ? stored.profile : null,
+    creations: Array.isArray(stored.creations) ? stored.creations.filter(isPlainObject).map(normalizeCreation) : [],
+    activeCreationId: typeof stored.activeCreationId === 'string' ? stored.activeCreationId : null,
+  });
 }
 
 export function saveCommunityState(state, storage = window.localStorage, key = COMMUNITY_STORAGE_KEY) {
@@ -610,10 +616,13 @@ function normalizeComments(comments) {
 }
 
 function normalizeCreation(creation) {
-  const versions = getCreationVersions(creation);
+  const versions = getCreationVersions({
+    versions: Array.isArray(creation.versions) ? creation.versions.filter(isPlainObject) : [],
+    currentVersion: isPlainObject(creation.currentVersion) ? creation.currentVersion : null,
+  });
   const currentVersion = versions.find((version) => version.id === creation.currentVersion?.id)
     || versions.at(-1)
-    || creation.currentVersion;
+    || null;
   return {
     attribution: '',
     tutorialReference: '',
@@ -627,7 +636,11 @@ function normalizeCreation(creation) {
 }
 
 function normalizeObject(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
+  return isPlainObject(value) ? { ...value } : {};
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function getIdSuffix(id) {

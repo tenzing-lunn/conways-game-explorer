@@ -22,6 +22,7 @@ import {
   replaceCreation,
   restoreCreationVersion as applyRestoreVersion,
   loadCommunityState as readStoredState,
+  normalizeCommunityState,
   saveCommunityState as writeStoredState,
   publishCreation as applyPublish,
   unpublishCreation as applyUnpublish,
@@ -30,7 +31,7 @@ import {
   cloneCreation as buildRemix,
 } from './community.js';
 import { migrateGuestProjects } from './guest-import.js';
-import { localTransaction } from './local-database.js';
+import { LOCAL_DATABASE_UNAVAILABLE, localTransaction, safeIndexedDB, safeStorage } from './local-database.js';
 
 // Backend selection (plan 2.5). Default is local; `supabase` is reserved for the
 // Phase 2 implementation and throws a clear error until it exists and is
@@ -1093,10 +1094,10 @@ function parseJsonResponse(text) {
 }
 
 export function createLocalCommunityRepository({
-  storage = globalThis.localStorage,
+  storage = safeStorage(),
   key = COMMUNITY_STORAGE_KEY,
   now = () => new Date().toISOString(),
-  indexedDB = globalThis.indexedDB,
+  indexedDB = safeIndexedDB(),
 } = {}) {
   if (indexedDB) return createIndexedCommunityRepository({ storage, key, now, indexedDB });
   let state = readStoredState(storage, key);
@@ -1358,14 +1359,28 @@ export function createLocalCommunityRepository({
 function createIndexedCommunityRepository({ storage, key, now, indexedDB }) {
   let cache = readStoredState(storage, key);
   let selectedId;
-  const transact = (action) => localTransaction(`${key}-projects-v2`, 'state', (stored) => {
-    const current = stored || readStoredState(storage, key);
+  // When the database cannot be opened at all (site data blocked, private
+  // modes), projects live in memory for this visit instead of failing.
+  let unavailable = false;
+  const apply = (current, action) => {
     const change = action(current);
     return { ...change, result: Promise.resolve(change.result).then((result) => ({ result, state: change.value || current })) };
-  }, { indexedDB }).then(({ result, state }) => {
+  };
+  const inMemory = (action) => apply(cache, action).result;
+  const transact = (action) => (unavailable ? inMemory(action) : localTransaction(`${key}-projects-v2`, 'state', (stored) => {
+    const current = stored
+      ? { ...normalizeCommunityState(stored), importMappings: normalizeMappings(stored.importMappings) }
+      : readStoredState(storage, key);
+    return apply(current, action);
+  }, { indexedDB }).catch((error) => {
+    if (error?.code !== LOCAL_DATABASE_UNAVAILABLE) throw error;
+    unavailable = true;
+    return inMemory(action);
+  })).then(({ result, state }) => {
     cache = { ...state, activeCreationId: selectedId === undefined ? state.activeCreationId : selectedId };
-    // The old storage is only a one-time migration source, never a live mirror.
-    try { storage.removeItem?.(key); } catch {}
+    // The old storage is only a one-time migration source, never a live mirror;
+    // keep it while nothing has been written to the database.
+    if (!unavailable) { try { storage.removeItem?.(key); } catch {} }
     return result;
   });
   const command = (method, args) => transact((current) => {
@@ -1379,6 +1394,8 @@ function createIndexedCommunityRepository({ storage, key, now, indexedDB }) {
   const api = {
     backend: 'local', requiresAuth: false,
     getState: () => cache,
+    // True once projects are only kept in memory, so the UI can say so.
+    isMemoryOnly: () => unavailable,
     findCreation: (id) => cache.creations.find((creation) => creation.id === id) || null,
     setActiveCreation(id) {
       selectedId = id;
@@ -1416,6 +1433,10 @@ function createIndexedCommunityRepository({ storage, key, now, indexedDB }) {
     api[method] = (...args) => command(method, args);
   }
   return api;
+}
+
+function normalizeMappings(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
 function createNoopAuthSubscription() {

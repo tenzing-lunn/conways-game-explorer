@@ -334,3 +334,90 @@ function pickCreationMigrationFields(input) {
     thumbnail: input.thumbnail,
   };
 }
+
+// A minimal IndexedDB stand-in: one object store, writes kept until the
+// transaction completes. `fail` makes open() fire onerror (blocked site data).
+function createFakeIndexedDB(records = new Map(), { fail = false } = {}) {
+  return {
+    records,
+    open() {
+      const request = { error: new Error('blocked') };
+      setTimeout(() => {
+        if (fail) { request.onerror?.(); return; }
+        const pending = new Map();
+        const tx = {
+          aborted: false,
+          abort() { tx.aborted = true; setTimeout(() => tx.onabort?.()); },
+          objectStore: () => ({
+            get(key) {
+              const read = {};
+              setTimeout(() => {
+                read.result = structuredClone(records.get(key));
+                read.onsuccess?.();
+                setTimeout(() => {
+                  if (tx.aborted) return;
+                  for (const [name, value] of pending) records.set(name, value);
+                  tx.oncomplete?.();
+                });
+              });
+              return read;
+            },
+            put(value, key) { pending.set(key, structuredClone(value)); },
+            delete(key) { pending.set(key, undefined); },
+          }),
+        };
+        request.result = { transaction: () => tx, close() {} };
+        request.onsuccess?.();
+      });
+      return request;
+    },
+  };
+}
+
+test('projects stay usable in memory when IndexedDB cannot be opened', async () => {
+  const indexedDB = createFakeIndexedDB(new Map(), { fail: true });
+  const repo = createLocalCommunityRepository({ storage: createMemoryStorage(), indexedDB, now: FIXED_NOW });
+
+  const state = await repo.loadCommunityState();
+  assert.deepEqual(state.creations, []);
+  const saved = await repo.saveCreation({ title: 'Blocked storage', rle: 'x = 1, y = 1, rule = B3/S23\no!' });
+  assert.equal(repo.getState().creations[0].id, saved.id);
+  assert.equal(repo.isMemoryOnly(), true);
+});
+
+test('an open() that throws also falls back to memory', async () => {
+  const indexedDB = { open() { throw new Error('denied'); } };
+  const repo = createLocalCommunityRepository({ storage: createMemoryStorage(), indexedDB, now: FIXED_NOW });
+
+  await repo.saveCreation({ title: 'Denied', rle: 'x = 1, y = 1, rule = B3/S23\no!' });
+  assert.equal(repo.getState().creations.length, 1);
+});
+
+test('the local repository starts when reading localStorage throws', async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('SecurityError'); } });
+  try {
+    const repo = createLocalCommunityRepository({ indexedDB: null, now: FIXED_NOW });
+    await repo.saveCreation({ title: 'No storage', rle: 'x = 1, y = 1, rule = B3/S23\no!' });
+    assert.equal(repo.getState().creations.length, 1);
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'localStorage', original);
+    else delete globalThis.localStorage;
+  }
+});
+
+test('corrupted IndexedDB state is normalised like the localStorage path', async () => {
+  for (const stored of ['oops', { creations: 'abc' }, { creations: [null, 5] }]) {
+    const records = new Map([['state', stored]]);
+    const repo = createLocalCommunityRepository({ storage: createMemoryStorage(), indexedDB: createFakeIndexedDB(records), now: FIXED_NOW });
+
+    const state = await repo.loadCommunityState();
+    assert.deepEqual(state.creations, []);
+    assert.deepEqual(records.get('state').creations, [], 'the cleaned state is written back');
+  }
+  const records = new Map([['state', { creations: [null, { id: 'c1', title: 'Kept', versions: [null] }] }]]);
+  const repo = createLocalCommunityRepository({ storage: createMemoryStorage(), indexedDB: createFakeIndexedDB(records), now: FIXED_NOW });
+  const state = await repo.loadCommunityState();
+  assert.deepEqual(state.creations.map((creation) => creation.title), ['Kept']);
+  assert.deepEqual(state.creations[0].versions, []);
+});
