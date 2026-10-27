@@ -201,3 +201,12 @@ test('Space presses a focused button instead of toggling Play', async ({ page })
   await page.keyboard.press('n');
   await expect(page.locator('#generation')).toHaveText('2');
 });
+
+test('reduced motion turns off sheet and toast transitions', async ({ page }) => {
+  watchErrors(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/studio');
+  const durations = await page.evaluate(() => ['#inspector', '#rail', '#toast', '#play-toggle']
+    .map((selector) => getComputedStyle(document.querySelector(selector)).transitionDuration));
+  expect(durations.every((duration) => duration.split(',').every((part) => part.trim() === '0s'))).toBe(true);
+});

@@ -928,3 +928,14 @@ kbd {
     grid-template-columns: 1fr 150px;
   }
 }
+
+/* Reduced motion: sheets, toasts and fades change at once. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
