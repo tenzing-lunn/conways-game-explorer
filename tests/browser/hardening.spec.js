@@ -183,3 +183,21 @@ test('hostile numbers in stored projects never become markup', async ({ page, is
   expect(await page.evaluate(() => ({ xss: window.__xss || 0, images: document.querySelectorAll('img[src="x"]').length })))
     .toEqual({ xss: 0, images: 0 });
 });
+
+test('Space presses a focused button instead of toggling Play', async ({ page }) => {
+  watchErrors(page);
+  await page.goto('/');
+  await expect(page.locator('#population')).toHaveText('5');
+  await page.locator('#step').focus();
+  await page.keyboard.press(' ');
+  await expect(page.locator('#generation')).toHaveText('1');
+  await page.locator('#more-menu-toggle').focus();
+  await page.keyboard.press(' ');
+  await expect(page.locator('#more-menu')).toBeVisible();
+  expect((await snapshot(page)).playing).toBe(false);
+  // Escape still closes the menu, and letter shortcuts still work.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#more-menu')).toBeHidden();
+  await page.keyboard.press('n');
+  await expect(page.locator('#generation')).toHaveText('2');
+});
