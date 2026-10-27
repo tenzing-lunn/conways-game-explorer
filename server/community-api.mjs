@@ -6,6 +6,7 @@ import { createRecoveryKey, recoverAccount, limitAction } from './account-securi
 import { createCreationImports } from './creation-imports.mjs';
 
 const MAX_BODY_BYTES = 1_000_000;
+export const USER_WRITES_PER_MINUTE = 120;
 
 // The application has a local Node server and a Cloudflare Worker deployment.
 // Keep the business route logic on standard Web Request/Response objects so
@@ -61,8 +62,10 @@ export async function handleCommunityFetchRequest({ request, auth, pool } = {}) 
 
     const repo = createPostgresCommunityRepository({ pool, userId: session.user.id });
     const imports = createCreationImports({ pool, userId: session.user.id });
-    if (!['GET', 'HEAD'].includes(request.method) && resource !== 'profile') {
-      await limitAction(pool, `${session.user.id}:${resource}`, 90);
+    // One bucket per account for every write, so spreading requests across
+    // resources does not multiply the allowance.
+    if (!['GET', 'HEAD'].includes(request.method)) {
+      await limitAction(pool, `${session.user.id}:writes`, USER_WRITES_PER_MINUTE);
     }
 
     if (resource === 'recovery-key' && request.method === 'POST') {

@@ -2,6 +2,16 @@ import { Pool } from 'pg';
 import { betterAuth } from 'better-auth';
 import { toNodeHandler } from 'better-auth/node';
 import { dash } from '@better-auth/infra';
+import { cleanDisplayName, cleanProfileUrl } from './profile-fields.mjs';
+
+// Sign-up accepts any `name`/`image`; bound them before they become a
+// profile display name or avatar.
+function boundAuthUser(user) {
+  const data = {};
+  if (user?.name !== undefined) data.name = cleanDisplayName(user.name) || 'Member';
+  if (user?.image !== undefined && user.image !== null) data.image = cleanProfileUrl(user.image) || null;
+  return { data };
+}
 
 export function getDatabaseConnectionString(env = process.env) {
   return env.DATABASE_URL || env.HYPERDRIVE?.connectionString || null;
@@ -92,6 +102,12 @@ export function createBetterAuth({
       // as a local-development fallback for Better Auth's rate limiter.
       ipAddress: {
         ipAddressHeaders: ['cf-connecting-ip', 'x-forwarded-for'],
+      },
+    },
+    databaseHooks: {
+      user: {
+        create: { before: async (user) => boundAuthUser(user) },
+        update: { before: async (user) => boundAuthUser(user) },
       },
     },
     user: {

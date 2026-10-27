@@ -42,7 +42,7 @@ test('community API reports invalid JSON as a client error', async () => {
   const handled = await handleCommunityRequest({
     request: requestWithBody('/api/community/profile', '{', { 'content-type': 'application/json' }),
     response,
-    pool: { connect() {} },
+    pool: { connect() {}, async query() { return { rows: [{ hits: 1 }] }; } },
     auth: { api: { async getSession() { return { user: { id: 'user-1' } }; } } },
   });
 
@@ -64,6 +64,18 @@ test('Node adapter compares mutations with the forwarded public origin', async (
   });
   assert.equal(response.status, 401);
   assert.equal(JSON.parse(response.body).code, 'AUTH_REQUIRED');
+});
+
+test('community API applies one write bucket per account across resources', async () => {
+  const buckets = [];
+  const pool = { connect() {}, async query(text, values) { buckets.push(values[0]); return { rows: [{ hits: 121 }] }; } };
+  const auth = { api: { async getSession() { return { user: { id: 'user-1' } }; } } };
+  for (const path of ['/api/community/profile', '/api/community/comments', '/api/community/creations']) {
+    const response = createResponse();
+    await handleCommunityRequest({ request: requestWithBody(path, '{}'), response, pool, auth });
+    assert.equal(response.status, 429, path);
+  }
+  assert.deepEqual(buckets, ['user-1:writes', 'user-1:writes', 'user-1:writes']);
 });
 
 function createResponse() {
