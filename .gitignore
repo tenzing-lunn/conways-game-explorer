@@ -9,3 +9,6 @@ worker-assets/
 .env
 .env.*
 !.env.example
+.dev.vars
+.DS_Store
+.claude/worktrees/
