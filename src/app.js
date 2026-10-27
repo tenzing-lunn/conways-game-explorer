@@ -1227,36 +1227,62 @@ function renderPublishButton() {
 function scheduleLocalRecovery() {
   if (state.boardOwner !== 'studio') return;
   window.clearTimeout(recoveryTimer);
-  recoveryTimer = window.setTimeout(async () => {
-    try {
-      // The Playground may be on screen by now; snapshot the Studio workspace.
-      const studio = state.boardOwner === 'studio' ? state : state.workspaces.studio;
-      if (!studio) return;
-      const authored = ownedSnapshot(studio.authoredStart || studio.board);
-      if (!studio.session && authored.population === 0) return;
-      const recovery = {
-        format: 'life-board-binary-v1',
-        creationId: studio.session?.creationId || null,
-        title: studio.session?.title || elements.projectTitle.value || 'Untitled project',
-        description: elements.projectDescription.value || '',
-        tags: elements.projectTags.value || '',
-        cells: new Uint8Array(authored.cells),
-        width: authored.width,
-        height: authored.height,
-        generation: 0,
-        population: authored.population,
-        settings: getCurrentDesignSettings(studio),
-        circuit: getCircuitSpec(studio.circuitSpec),
-        savedAt: new Date().toISOString(),
-      };
-      await writeRecovery(LOCAL_RECOVERY_KEY, recovery);
-      browserStorage.removeItem(LOCAL_RECOVERY_KEY);
-      state.recoveryFailed = false;
-    } catch {
-      state.recoveryFailed = true;
-      setSaveStatus('failed');
-    }
-  }, 500);
+  recoveryTimer = window.setTimeout(() => writeLocalRecovery(), 500);
+}
+
+// Leaving or hiding the page saves a pending recovery at once, so the last
+// half second of edits survives a reload or a closed tab. An IndexedDB write
+// may not finish while the page unloads, so a synchronous RLE copy goes to
+// localStorage first; the database write removes it once it lands.
+function flushLocalRecovery() {
+  if (!recoveryTimer) return;
+  window.clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+  const recovery = getLocalRecovery();
+  if (!recovery) return;
+  try {
+    const { cells, format, ...rest } = recovery;
+    const board = { ...createBoard(recovery.width, recovery.height), cells };
+    browserStorage.setItem(LOCAL_RECOVERY_KEY, JSON.stringify({ ...rest, rle: boardToRle(board) }));
+  } catch { /* too large or blocked: the database write below still runs */ }
+  writeLocalRecovery(recovery);
+}
+
+// The Studio workspace as a recovery record, or null when there is nothing to keep.
+function getLocalRecovery() {
+  // The Playground may be on screen by now; snapshot the Studio workspace.
+  const studio = state.boardOwner === 'studio' ? state : state.workspaces.studio;
+  if (!studio) return null;
+  const authored = ownedSnapshot(studio.authoredStart || studio.board);
+  if (!studio.session && authored.population === 0) return null;
+  return {
+    format: 'life-board-binary-v1',
+    creationId: studio.session?.creationId || null,
+    title: studio.session?.title || elements.projectTitle.value || 'Untitled project',
+    description: elements.projectDescription.value || '',
+    tags: elements.projectTags.value || '',
+    cells: new Uint8Array(authored.cells),
+    width: authored.width,
+    height: authored.height,
+    generation: 0,
+    population: authored.population,
+    settings: getCurrentDesignSettings(studio),
+    circuit: getCircuitSpec(studio.circuitSpec),
+    savedAt: new Date().toISOString(),
+  };
+}
+
+async function writeLocalRecovery(recovery = getLocalRecovery()) {
+  recoveryTimer = null;
+  try {
+    if (!recovery) return;
+    await writeRecovery(LOCAL_RECOVERY_KEY, recovery);
+    browserStorage.removeItem(LOCAL_RECOVERY_KEY);
+    state.recoveryFailed = false;
+  } catch {
+    state.recoveryFailed = true;
+    setSaveStatus('failed');
+  }
 }
 
 function clearLocalRecovery() {
@@ -1274,7 +1300,10 @@ function clearLocalRecovery() {
 async function restoreLocalRecovery() {
   try {
     const raw = browserStorage.getItem(LOCAL_RECOVERY_KEY);
-    const recovery = await readRecovery(LOCAL_RECOVERY_KEY) || (raw && JSON.parse(raw));
+    const copy = raw ? JSON.parse(raw) : null;
+    const stored = await readRecovery(LOCAL_RECOVERY_KEY).catch(() => null);
+    // A copy written while the page closed is newer than the database record.
+    const recovery = copy && !(String(stored?.savedAt || '') > String(copy.savedAt || '')) ? copy : stored;
     if (!recovery) return false;
     if (!recovery.creationId && !(Number(recovery.population) > 0)) return false;
     swapWorkspace('studio');
@@ -4904,6 +4933,10 @@ function bindEvents() {
   });
   window.addEventListener('online', () => {
     if (state.designDirty) setSaveStatus('dirty');
+  });
+  window.addEventListener('pagehide', flushLocalRecovery);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushLocalRecovery();
   });
   window.addEventListener('beforeunload', (event) => {
     if (!state.designDirty || !state.recoveryFailed) return;

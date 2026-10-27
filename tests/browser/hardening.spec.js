@@ -210,3 +210,14 @@ test('reduced motion turns off sheet and toast transitions', async ({ page }) =>
     .map((selector) => getComputedStyle(document.querySelector(selector)).transitionDuration));
   expect(durations.every((duration) => duration.split(',').every((part) => part.trim() === '0s'))).toBe(true);
 });
+
+test('a reload straight after an edit keeps that edit', async ({ page, isMobile }) => {
+  watchErrors(page);
+  await page.goto('/studio');
+  await clickBoard(page, isMobile, 0.46, 0.4);
+  await clickBoard(page, isMobile, 0.56, 0.46);
+  await expect(page.locator('#population')).toHaveText('2');
+  // Inside the 500 ms recovery debounce.
+  await page.reload();
+  await expect(page.locator('#population')).toHaveText('2');
+});
